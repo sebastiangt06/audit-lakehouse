@@ -1,0 +1,13 @@
+# Normalize text files in the repo; force LF on files executed or mounted inside Linux containers
+# (CRLF breaks shebangs: "/bin/sh^M: bad interpreter").
+* text=auto
+*.sh       text eol=lf
+Makefile   text eol=lf
+*.sql      text eol=lf
+*.py       text eol=lf
+*.conf     text eol=lf
+*.properties text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
