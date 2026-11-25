@@ -82,10 +82,12 @@ forense de reintentos.
   entre costo de almacenamiento y capacidad de auditoría o rollback.
 
 ## ADR-007 — Catálogo: Iceberg REST local, Glue en AWS
-**Decisión.** Usamos `apache/iceberg-rest-fixture` con persistencia en volumen. En AWS el cambio es
-`catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog`.
+**Decisión.** Usamos `apache/iceberg-rest-fixture` con persistencia en volumen. En AWS se apunta al
+**endpoint Iceberg REST de AWS Glue** (mismo protocolo, solo cambia la URI y se agrega auth SigV4) o
+se usa `catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog`.
 **Por qué.** No hay emulación gratuita y sin cuenta del Glue Data Catalog (LocalStack ahora exige
-cuenta). La gobernanza no exige rehacer el modelo porque **el esquema, las particiones y los snapshots
+cuenta). Hablar el protocolo REST de Iceberg en local es hablar el mismo protocolo que Glue expone
+en la nube. La gobernanza no exige rehacer el modelo porque **el esquema, las particiones y los snapshots
 viven en los metadatos de Iceberg en S3**, no en el catálogo; el catálogo solo guarda el puntero al
 `metadata.json` vigente. Glue suma descubrimiento, Lake Formation (permisos por columna y fila) y
 compactación administrada sin tocar tablas ni modelos dbt.
@@ -105,8 +107,21 @@ compactación y el `remove_orphan_files`. Opciones: modo *governance* con retenc
 bucket de archivo inmutable separado de la tabla operativa. La retención legal exacta depende del
 tipo de registro y se valida con el área de cumplimiento.
 
+## ADR-011 — Motor Spark = imagen oficial AWS Glue 5.0
+**Decisión.** Los jobs PySpark corren en `public.ecr.aws/glue/aws-glue-libs:5` (Spark 3.5.4, Iceberg
+1.7.1 precargado, librería `awsglue`) y se escriben como jobs Glue (`GlueContext`,
+`getResolvedOptions`, `Job.commit`).
+**Por qué.** La prueba pide AWS Glue dockerizado localmente. Con esta imagen, el código del PoC es
+el mismo que correría en AWS Glue, y no hay que armar a mano la matriz de compatibilidad
+Spark/Scala/Iceberg, porque AWS ya la fija.
+**Alternativa.** `apache/spark` + jars de Iceberg: es más liviana, pero no prueba nada sobre Glue y
+obliga a mantener la compatibilidad de jars a mano.
+**Consecuencias.** La imagen pesa varios GB (el primer pull es lento). Iceberg queda fijo en 1.7.1,
+y Trino y el catálogo deben ser compatibles con esa versión. Hay funciones de Glue que no existen en
+local (bookmarks gestionados, conexiones del catálogo), y se documentan como limitaciones.
+
 ## ADR-009 — Spark en modo local, Trino como motor de dbt
-**Decisión.** Spark corre en `local[*]` (sin master/workers) y dbt usa `dbt-trino`.
+**Decisión.** Spark (imagen Glue) corre en `local[*]` (sin master/workers) y dbt usa `dbt-trino`.
 **Por qué.** En un PoC un cluster Spark solo suma RAM y puntos de falla sin probar nada nuevo. Trino
 da un adaptador dbt estable sobre Iceberg y un catálogo `sqlserver` que permite **reconciliar
 outbox vs lakehouse con SQL** (test `assert_no_event_loss`). En AWS el equivalente es Athena (motor
@@ -116,7 +131,7 @@ Trino) con `dbt-athena`.
 | Elegido | Descartado | Motivo |
 |---|---|---|
 | SeaweedFS | MinIO | Sin imágenes Docker oficiales desde oct-2025 |
-| `apache/kafka`, `apache/spark` | `bitnami/*` | Catálogo gratuito retirado en 2025 |
+| `apache/kafka`, `public.ecr.aws/glue/aws-glue-libs:5` | `bitnami/*` | Catálogo gratuito retirado en 2025 |
 | `apache/kafka` | Redpanda | Licencia BSL |
 | Iceberg REST fixture | LocalStack (Glue) | Requiere cuenta; el plan gratis es no comercial |
 | Clases planas | MediatR ≥13 | Licencia dual RPL/comercial |

@@ -7,7 +7,8 @@ Recomendación de flujo por paso:
 1. En Claude Code, entra en *plan mode* (Shift+Tab) y pega el prompt. Revisa el plan que propone.
 2. Aprueba, deja que implemente, corre la verificación.
 3. Si tuviste que corregirlo → **anota la corrección en `docs/ai-log.md` en ese momento** (es 30% de la nota).
-4. Commit + push.
+4. Claude Code hace el commit en la rama actual tras tu confirmación. **Las ramas y el push los haces tú**
+   (está bloqueado en `.claude/settings.json`).
 
 Presupuesto de tiempo (hasta 26-nov 12:00). Los pasos marcados ⭐ son los que más puntúan; si vas corto
 de tiempo, recorta los marcados 🟡.
@@ -19,7 +20,7 @@ de tiempo, recorta los marcados 🟡.
 | 02 | .NET: dominio + API + outbox | 1.5 h | ⭐ |
 | 03 | .NET: relay → Kafka | 1 h | ⭐ |
 | 04 | LoadGen + tests | 45 min | |
-| 05 | Spark: imagen + bronze + streaming | 1.5 h | ⭐ riesgo alto |
+| 05 | AWS Glue 5.0 (Spark) + bronze + streaming | 1.5 h | ⭐ riesgo alto |
 | 06 | Trino + dbt | 1.5 h | ⭐ |
 | 07 | Compactación / mantenimiento | 45 min | ⭐ |
 | 08 | Evolución de esquema | 30 min | ⭐ |
@@ -36,7 +37,7 @@ de tiempo, recorta los marcados 🟡.
 **Prompt**
 ```
 Lee CLAUDE.md y docs/. Crea el scaffold del repo según la estructura de CLAUDE.md:
-.gitignore (dotnet, python, dbt target/logs, .env, volúmenes locales), .env.example con todas las
+.gitignore (dotnet, python, dbt target/logs, .env, volúmenes locales, .claude/settings.local.json), .env.example con todas las
 variables que usaremos (SA password, credenciales S3 locales, nombres de topic/bucket), un Makefile con
 targets vacíos documentados (up, down, clean, demo, load, dbt, maintenance, chaos, replay, evolve,
 lifecycle, metrics) y carpetas vacías con .gitkeep. No crees servicios todavía.
@@ -154,17 +155,25 @@ in-memory o Testcontainers si está disponible sin cuentas; explica la elección
 
 ---
 
-## 05 — Spark: imagen + tabla bronze + streaming ⭐
+## 05 — AWS Glue 5.0 (Spark) + tabla bronze + streaming ⭐
 **Prompt**
 ```
-Crea lakehouse/spark/Dockerfile basado en apache/spark 3.5.x (python3) que descarga EN BUILD (no en
-runtime con --packages) los jars: iceberg-spark-runtime-3.5_2.12, iceberg-aws-bundle (misma versión
-de Iceberg) y spark-sql-kafka-0-10_2.12 + dependencias (kafka-clients, commons-pool2,
-spark-token-provider-kafka). Verifica las coordenadas exactas y la compatibilidad en Maven Central.
-conf/spark-defaults.conf: catálogo `lake` tipo rest (uri iceberg-rest:8181), io-impl S3FileIO,
-s3.endpoint seaweedfs, path-style-access=true, extensiones de Iceberg SQL.
-Incluye en un comentario el bloque equivalente para AWS Glue (catalog-impl GlueCatalog) para mostrar
-que el cambio es solo de configuración.
+El motor Spark es la imagen OFICIAL de AWS Glue 5.0: public.ecr.aws/glue/aws-glue-libs:5
+(Spark 3.5.4, Iceberg 1.7.1 precargado, librería awsglue). Pull anónimo, sin cuenta AWS.
+1. Antes de escribir nada, inspecciona la imagen: `docker run --rm --entrypoint bash
+   public.ecr.aws/glue/aws-glue-libs:5 -c "ls /usr/lib/spark/jars | grep -Ei 'iceberg|kafka|aws'"`
+   (ajusta la ruta si no existe; búscala) y dime: versión exacta de Iceberg, si trae el conector
+   Kafka para Structured Streaming (spark-sql-kafka-0-10) e iceberg-aws/S3FileIO, usuario y
+   entrypoint por defecto. NO agregues otra versión de Iceberg. Si falta el conector Kafka,
+   descárgalo EN BUILD en la versión compatible con Spark 3.5.4 / Scala 2.12 (verifica en Maven Central).
+2. lakehouse/glue/Dockerfile FROM esa imagen (pin por digest además del tag "5").
+3. conf: catálogo `lake` tipo rest (uri iceberg-rest:8181), io-impl S3FileIO, s3.endpoint
+   seaweedfs, path-style-access=true, credenciales dummy de .env, extensiones de Iceberg SQL.
+   Documenta en comentario los dos bloques de producción: (a) endpoint Iceberg REST de AWS Glue
+   con SigV4, (b) catalog-impl org.apache.iceberg.aws.glue.GlueCatalog. El cambio es solo config.
+4. Los jobs se escriben como jobs AWS Glue: getResolvedOptions para parámetros, GlueContext,
+   Job.init / job.commit; la lógica en funciones puras de PySpark (testeables). Así corren igual en
+   AWS Glue.
 
 jobs/create_tables.py: namespace lake.audit y tabla `lake.audit.events_bronze`:
   columnas: event_id, event_type, aggregate_type, aggregate_id, tenant_id, actor_id,
@@ -180,14 +189,16 @@ jobs/ingest_audit_stream.py: Structured Streaming desde audit.events → append 
   trigger processingTime configurable (default 60s — justifica en comentario: latencia vs small files),
   checkpoint en volumen /checkpoints/audit_bronze, maxOffsetsPerTrigger configurable,
   startingOffsets earliest, failOnDataLoss=true. Parsear el JSON del valor; conservar partition/offset.
-Servicio `spark-ingest` (long-running) y `spark-jobs` (profile tools, para docker compose run).
+Servicio `glue-ingest` (long-running, spark-submit del job de streaming) y `glue-jobs`
+(profile tools, para docker compose run). Nota: la imagen pesa varios GB; documenta en el README
+que el primer `make up` tarda por el pull.
 ```
 **Verificación**
 ```bash
 make load N=3000 P=20
 # esperar ~1–2 triggers
-docker compose run --rm spark-jobs spark-sql -e "select count(*), count(distinct event_id) from lake.audit.events_bronze"
-docker compose run --rm spark-jobs spark-sql -e "select partition, file_count from lake.audit.events_bronze.partitions"
+docker compose run --rm glue-jobs spark-sql -e "select count(*), count(distinct event_id) from lake.audit.events_bronze"
+docker compose run --rm glue-jobs spark-sql -e "select partition, file_count from lake.audit.events_bronze.partitions"
 ```
 **Commit**: `feat(spark): iceberg bronze table and kafka streaming ingestion`
 
@@ -271,7 +282,7 @@ HOT  SQL Server: solo últimos HOT_DAYS (default 90) en audit.AuditLog; outbox p
 WARM Iceberg: todo el histórico, consultable.
 COLD (prod): S3 Intelligent-Tiering / lifecycle; retención regulatoria y borrado por partición.
 
-1. jobs/backfill_audit_log.py: lee audit.AuditLog por JDBC (mssql-jdbc en la imagen) en rangos por
+1. jobs/backfill_audit_log.py: lee audit.AuditLog por JDBC (mssql-jdbc: verifica si la imagen Glue lo trae; si no, agrégalo en build) en rangos por
    mes (partitionColumn/lowerBound/upperBound o predicates), escribe en lake.audit.events_bronze
    (con event_type 'legacy.audit') de forma idempotente (MERGE por event_id o overwrite de
    particiones del rango). Verifica conteos por mes origen vs destino y aborta si no cuadran.
@@ -292,8 +303,8 @@ Target `make lifecycle` que corre backfill → verificación → purga y muestra
 **Prompt**
 ```
 scripts/chaos_demo.sh (target `make chaos`):
-1. Escenario A — cae la ingesta: docker compose stop spark-ingest; carga 5000; verificar que la API
-   respondió 2xx siempre y que Kafka acumula lag (kafka-consumer-groups / offsets); start spark-ingest;
+1. Escenario A — cae la ingesta: docker compose stop glue-ingest; carga 5000; verificar que la API
+   respondió 2xx siempre y que Kafka acumula lag (kafka-consumer-groups / offsets); start glue-ingest;
    esperar y mostrar que bronze recuperó todo.
 2. Escenario B — cae Kafka: stop kafka; carga 2000; mostrar que la API sigue OK y que el outbox
    acumula pendientes; start kafka; el relay drena; reconciliación OK.

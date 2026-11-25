@@ -13,7 +13,7 @@ Contexto del repo:
 
 Instrucciones:
 1. Lee `docs/ai-log.md` y usa el siguiente número correlativo (IA-NN) en la sección
-   "Fase 2 — Implementación". Si existe la plantilla vacía `IA-07 · _título_`, reemplázala.
+   "Fase 2 — Implementación". Si existe la plantilla vacía `IA-NN · _título_`, reemplázala.
 2. Llena el formato: **Commit**, **Prompt**, **Respuesta de la IA**, **Problema detectado**,
    **Decisión humana**, **Evidencia**.
 3. Reglas de honestidad (esto se evalúa y se defiende en vivo):
