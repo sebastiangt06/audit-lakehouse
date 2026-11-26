@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Talks to the API only over HTTP: no reference to Makers.Core.Api, no extra packages. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Makers.Core.LoadGen</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -57,6 +57,7 @@ services:
   core-api:
     build:
       context: ./src/dotnet
+      target: api
     image: audit-lakehouse/core:local
     depends_on:
       sqlserver-init:
@@ -82,6 +83,7 @@ services:
   outbox-relay:
     build:
       context: ./src/dotnet
+      target: api
     image: audit-lakehouse/core:local
     depends_on:
       sqlserver-init:
@@ -99,6 +101,21 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Load generator (profile "tools": never started by `up`, only by `make load`).
+  # Own target of the same Dockerfile; args: --count N --parallel P [--base-url URL].
+  # ---------------------------------------------------------------------------
+  loadgen:
+    build:
+      context: ./src/dotnet
+      target: loadgen
+    image: audit-lakehouse/loadgen:local
+    profiles: ["tools"]
+    depends_on:
+      core-api:
+        condition: service_healthy
+    restart: "no"
 
   # ---------------------------------------------------------------------------
   # Durable buffer + replay window (KRaft, single node)

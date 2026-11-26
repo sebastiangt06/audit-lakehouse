@@ -46,6 +46,8 @@ puede correr sin `make` (por ejemplo, en Windows sin make instalado) con el coma
 | `make up` | `docker compose up -d --wait` | Levanta todo y espera a que esté healthy (requiere `.env`) |
 | `make down` | `docker compose down` | Detiene los servicios, conserva los volúmenes |
 | `make clean` | `docker compose down -v` | Detiene y **borra los volúmenes** (todos los datos locales) |
+| `make load N=5000 P=20` | `docker compose run --rm loadgen --count 5000 --parallel 20` | N `POST /transactions` con paralelismo P (defaults N=1000, P=10); imprime códigos HTTP, req/s y latencias p50/p95/p99. Sale ≠0 si hubo algún 5xx |
+| `make test` | `bash scripts/test.sh` | `dotnet test` dentro de la imagen SDK pinneada (no requiere SDK local). Con `make up` corriendo incluye el test de atomicidad contra SQL Server real; sin él, ese test sale **skipped**. Cache NuGet en el volumen `audit-lakehouse_nuget-cache` (no lo borra `make clean`) |
 | `make demo` | _(paso 06)_ | Flujo end-to-end |
 | `make chaos` | _(paso 10)_ | Cero pérdida con caída de ingesta y de Kafka |
 | `make replay FROM=...` | _(paso 10)_ | Replay desde Kafka / outbox |

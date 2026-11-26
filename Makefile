@@ -5,11 +5,11 @@
 SHELL := /bin/sh
 .DEFAULT_GOAL := help
 
-N ?= 3000
-P ?= 20
+N ?= 1000
+P ?= 10
 FROM ?=
 
-.PHONY: help up down clean demo load dbt maintenance chaos replay evolve lifecycle metrics
+.PHONY: help up down clean test demo load dbt maintenance chaos replay evolve lifecycle metrics
 
 help: ## List available targets
 	@bash scripts/help.sh
@@ -23,8 +23,11 @@ down: ## Stop services, keep volumes
 clean: ## Stop services and delete volumes (all local data)
 	docker compose down -v
 
-load: ## Generate load: make load N=5000 P=20 [step 04]
-	@bash scripts/not_implemented.sh load 04
+test: ## Run .NET tests in the pinned SDK image (atomicity test needs `make up`)
+	bash scripts/test.sh
+
+load: ## Generate load: make load N=5000 P=20 (defaults N=1000 P=10)
+	docker compose run --rm loadgen --count $(N) --parallel $(P)
 
 demo: ## End-to-end flow: load -> outbox -> kafka -> iceberg -> dbt -> gold [step 06]
 	@bash scripts/not_implemented.sh demo 06

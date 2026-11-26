@@ -104,7 +104,34 @@ Formato de cada entrada:
     transacciones = filas de outbox para `t3:A7` → `40 / 40`. Cuenta `NOPE9` → `HTTP 422 "Unknown source account"`.
 - **ADR afectado:** ninguno. La auto-apertura de cuentas no estaba en ningún ADR; fue un detalle de implementación del plan.
 
-### IA-09 · _título_
+### IA-09 · La IA configuró xUnit v3 con el runner VSTest, que el SDK de .NET 10 ya no soporta ⚠️
+- **Commit:** _por completar_ (paso 04, `feat(dotnet): load generator and outbox atomicity tests`)
+- **Prompt:** `/step 04` + prompt detallado del paso 04: "Makers.Core.Tests (xUnit, en la solución) … Test de
+  ATOMICIDAD contra el SQL Server real del compose … Si no hay SQL Server disponible, el test se marca como
+  skipped, no como verde … crea scripts/test.sh que corre `dotnet test` dentro de la imagen sdk pinneada".
+- **Respuesta de la IA:** en el plan propuso xUnit v3 (por `Assert.Skip` nativo) corriendo sobre VSTest:
+  `Microsoft.NET.Test.Sdk` 18.12.0 + `xunit.runner.visualstudio` 4.0.1 + `xunit.v3` 4.0.3. Dijo que había
+  verificado las versiones en nuget.org. Solo verificó que existieran, no que fueran compatibles con el
+  runner del SDK de .NET 10. Aprobé el plan sin notarlo.
+- **Problema detectado:** la primera corrida de `bash scripts/test.sh` falló en el build:
+  `error : Testing with VSTest target is no longer supported by Microsoft.Testing.Platform on .NET 10 SDK
+  and later. If you use dotnet test, you should opt-in to the new dotnet test experience.`
+  xUnit v3 4.x corre sobre Microsoft.Testing.Platform (MTP) y el SDK 10.0.404 ya no acepta el modo VSTest para él.
+- **Decisión humana:** pasar a MTP: `src/dotnet/global.json` con `"test": { "runner": "Microsoft.Testing.Platform" }`,
+  quitar los paquetes de VSTest y cambiar el script a `dotnet test --solution Makers.Core.sln`.
+  Lección: la verificación ejecutada atrapa lo que la revisión del plan no ve; por eso cada paso exige
+  salida real.
+- **Evidencia:**
+  - Error y guía oficial: https://aka.ms/dotnet-test-mtp-error (enlace incluido en el propio mensaje de error).
+  - `src/dotnet/global.json:2-4` → opt-in a MTP.
+  - `src/dotnet/Makers.Core.Tests/Makers.Core.Tests.csproj:4-5,13-14` → solo `xunit.v3` + EF InMemory, sin paquetes VSTest.
+  - `scripts/test.sh:49` → `dotnet test --solution Makers.Core.sln -c Release --output Detailed`.
+  - Re-corrida: `Test run summary: Passed! total: 7 failed: 0 succeeded: 7 skipped: 0`, con
+    `passed Makers.Core.Tests.OutboxAtomicityTests.SaveChanges_FailingAfterInsertsBeforeCommit_PersistsNeitherTransactionNorOutboxRow`.
+    Sin la red del compose: `succeeded: 6 skipped: 1`.
+- **ADR afectado:** ninguno. El runner de tests no está en ningún ADR; ADR-004 cubre .NET 10 y la estructura, no el tooling de tests.
+
+### IA-10 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**
