@@ -252,9 +252,17 @@ La garantía se defiende por capas: en cada una, el dato ya está persistido ant
    `Outbox relay recovered after 8 failed attempts` y el backlog se drenó de 123 pendientes a 0. La
    configuración valida al arrancar que `Kafka:MessageTimeoutMs` (10.000 ms) sea menor que la lease
    (30 s), para que una lease no expire con mensajes en vuelo.
-3. **Ingesta.** Kafka retiene 7 días, y `glue-ingest` retoma desde su checkpoint (volumen) con
-   `restart: on-failure`. **No forcé una caída de `glue-ingest` como prueba de caos:** el mecanismo está
-   configurado, pero no lo demostré.
+3. **Ingesta caída durante un pico.** Kafka retiene 7 días, y `glue-ingest` retoma desde su checkpoint
+   (volumen). Lo probé con `docker compose stop glue-ingest` y un pico de 1000 transacciones (P=20):
+   - La API respondió **1000×201** (728,3 req/s, p95 59,6 ms); no depende de la ingesta.
+   - Durante ~1 min con el job detenido, el outbox despachado y los offsets de Kafka subieron de 1000 a
+     **2000** mientras bronze se quedó en **1000**.
+   - Con `docker compose start glue-ingest`, el job retomó del checkpoint con un único batch de
+     recuperación, `[ingest] batch=2 rows=1000` (antes iba en `batch=1`): leyó solo lo pendiente, sin
+     reprocesar. Bronze alcanzó al outbox 27 s después del arranque.
+   - Resultado: outbox despachado = bronze = offsets de Kafka = **2000**, `count(distinct event_id)` =
+     `count(*)` = 2000 en bronze (sin duplicados), y después `dbt build` con `MERGE (1_000 rows)`, silver
+     en 2000/2000 y `assert_no_event_loss` en PASS.
 4. **At-least-once + dedupe.** Inserté en bronze 3 copias de eventos existentes con otro `kafka_offset`
    (2505 filas / 2502 distintas). Silver siguió en 2502, conservó los offsets originales y `unique` pasó,
    tanto en incremental (`MERGE (0 rows)`) como con `--full-refresh`.
@@ -343,8 +351,9 @@ tiempo ahorrado.
   y purga por lotes en SQL Server **solo** de meses verificados (`audit.OffloadWatermark`); purga del
   outbox a 7 días. Los eventos del backfill no pasan por el outbox, así que su verificación sería una
   conciliación propia por mes (conteo y checksum), no `assert_no_event_loss`.
-- **Paso 10 · Caos y replay como scripts (ADR-005, ADR-002).** La caída de Kafka se probó a mano en el
-  paso 03; el replay está descrito en la sección 4.3.
+- **Paso 10 · Caos y replay como scripts (ADR-005, ADR-002).** La caída de Kafka (paso 03) y la de la
+  ingesta (sección 4.3) las probé a mano con `docker compose stop/start`; falta empaquetarlas como
+  `make chaos`. El replay está descrito en la sección 4.3, sin script.
 - **Paso 11 · Hiper-logs (ADR-003).** `Channel<T>` acotado con `DropOldest` → topic `app.logs` (ya creado),
   con un contador de descartados.
 - **Paso 12 · Métricas automatizadas.** Los números de 4.1 los medí a mano; falta el experimento del p95
