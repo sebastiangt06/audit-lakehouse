@@ -1,0 +1,174 @@
+# Audit Offloading Lakehouse — local PoC.
+# All images pinned (never `latest`) and verified with `docker manifest inspect`.
+# Variables come from .env (cp .env.example .env).
+
+name: audit-lakehouse
+
+services:
+  # ---------------------------------------------------------------------------
+  # Core OLTP + transactional outbox
+  # ---------------------------------------------------------------------------
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04
+    platform: linux/amd64 # SQL Server is amd64-only (Rosetta on Apple Silicon)
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: ${MSSQL_PID}
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD}
+      # Keep SQL Server below the container limit; otherwise it sizes its buffer pool
+      # from host RAM and gets OOM-killed.
+      MSSQL_MEMORY_LIMIT_MB: "1536"
+    mem_limit: 2g
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -Q 'SELECT 1' > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Durable buffer + replay window (KRaft, single node)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:4.3.2
+    environment:
+      CLUSTER_ID: "mK3rS0audItLakeHouse01"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created explicitly by kafka-init (partitions/retention are a design decision).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  kafka-init:
+    image: apache/kafka:4.3.2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      AUDIT_TOPIC: ${AUDIT_TOPIC}
+      LOGS_TOPIC: ${LOGS_TOPIC}
+    entrypoint: ["bash", "-c"]
+    # Idempotent: --if-not-exists. Audit: 7 days (replay window, ADR-008). Logs: 3 days.
+    command:
+      - |
+        set -euo pipefail
+        T=/opt/kafka/bin/kafka-topics.sh
+        $$T --bootstrap-server "$$BOOTSTRAP" --create --if-not-exists --topic "$$AUDIT_TOPIC" \
+          --partitions 6 --replication-factor 1 \
+          --config retention.ms=604800000 --config cleanup.policy=delete
+        $$T --bootstrap-server "$$BOOTSTRAP" --create --if-not-exists --topic "$$LOGS_TOPIC" \
+          --partitions 3 --replication-factor 1 \
+          --config retention.ms=259200000 --config cleanup.policy=delete
+        $$T --bootstrap-server "$$BOOTSTRAP" --describe --topic "$$AUDIT_TOPIC"
+        $$T --bootstrap-server "$$BOOTSTRAP" --describe --topic "$$LOGS_TOPIC"
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # S3-compatible object storage (stands in for Amazon S3)
+  # ---------------------------------------------------------------------------
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.55
+    # Credentials in s3.json must match S3_ACCESS_KEY / S3_SECRET_KEY in .env.
+    command: >
+      server -dir=/data -ip.bind=0.0.0.0 -volume.max=0
+      -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "8333:8333"
+    volumes:
+      - seaweedfs-data:/data
+      - ./infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  storage-init:
+    image: amazon/aws-cli:2.42.4
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      BUCKET: ${WAREHOUSE_BUCKET}
+    entrypoint: ["bash", "-c"]
+    # Idempotent: create the bucket only if it does not exist.
+    command:
+      - |
+        set -euo pipefail
+        if aws --endpoint-url "$$S3_ENDPOINT" s3api head-bucket --bucket "$$BUCKET" 2>/dev/null; then
+          echo "bucket $$BUCKET already exists"
+        else
+          aws --endpoint-url "$$S3_ENDPOINT" s3 mb "s3://$$BUCKET"
+        fi
+        aws --endpoint-url "$$S3_ENDPOINT" s3 ls
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Iceberg REST catalog (~ AWS Glue Data Catalog / Glue Iceberg REST endpoint in prod)
+  # 1.8.1 = closest published fixture to Glue 5.0's Iceberg 1.7.1 (no 1.7.x image exists).
+  # ---------------------------------------------------------------------------
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.8.1
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    environment:
+      # CATALOG_* env vars map to catalog properties: "__" -> "-", "_" -> "."
+      CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
+      # Persisted sqlite catalog (image default is in-memory and is lost on restart).
+      # /home/iceberg is owned by the image user, so the named volume inherits that ownership.
+      CATALOG_URI: jdbc:sqlite:/home/iceberg/iceberg_catalog.db
+      CATALOG_WAREHOUSE: s3://${WAREHOUSE_BUCKET}/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: ${S3_ENDPOINT}
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: ${AWS_REGION}
+    ports:
+      - "8181:8181"
+    volumes:
+      - iceberg-catalog:/home/iceberg
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8181/v1/config > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  sqlserver-data:
+  kafka-data:
+  seaweedfs-data:
+  iceberg-catalog:

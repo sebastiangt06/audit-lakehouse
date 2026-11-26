@@ -1,13 +1,22 @@
-# Normalize text files in the repo; force LF on files executed or mounted inside Linux containers
-# (CRLF breaks shebangs: "/bin/sh^M: bad interpreter").
-* text=auto
-*.sh       text eol=lf
-Makefile   text eol=lf
-*.sql      text eol=lf
-*.py       text eol=lf
-*.conf     text eol=lf
+# Repo is developed on Windows but scripts/configs run inside Linux containers:
+# force LF everywhere (CRLF breaks shebangs and shell parsing: "/bin/sh^M: bad interpreter").
+* text=auto eol=lf
+
+*.sh         text eol=lf
+*.sql        text eol=lf
+*.py         text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
 *.properties text eol=lf
-*.yml      text eol=lf
-*.yaml     text eol=lf
-Dockerfile text eol=lf
-.env.example text eol=lf
+*.json       text eol=lf
+*.conf       text eol=lf
+Makefile     text eol=lf
+Dockerfile   text eol=lf
+*.cs         text eol=lf
+*.csproj     text eol=lf
+
+# Visual Studio solution files keep CRLF
+*.sln        text eol=crlf
+
+*.png        binary
+*.jpg        binary

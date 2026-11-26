@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "lakehouse",
+      "credentials": [
+        {
+          "accessKey": "makers-local-key",
+          "secretKey": "makers-local-secret"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
