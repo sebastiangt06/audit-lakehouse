@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: daily_activity_by_tenant
+    description: Transactions, total and average amount per day, tenant and currency.
+    columns:
+      - name: activity_date
+        data_tests: [not_null]
+      - name: tenant_id
+        data_tests: [not_null]
+      - name: transactions
+        data_tests: [not_null]
+  - name: high_value_transactions
+    description: Transfers at or above the high-value threshold (10,000,000 COP), for regulatory reporting.
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: amount
+        data_tests: [not_null]

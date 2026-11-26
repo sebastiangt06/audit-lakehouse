@@ -1,0 +1,14 @@
+# All connection settings from environment variables (set by the `dbt` service in compose).
+audit_lakehouse:
+  target: local
+  outputs:
+    local:
+      type: trino
+      method: none            # local PoC; prod (Athena/Trino) uses IAM / LDAP / OAuth
+      http_scheme: http
+      host: "{{ env_var('TRINO_HOST', 'trino') }}"
+      port: "{{ env_var('TRINO_HTTP_PORT', '8080') | int }}"
+      user: "{{ env_var('TRINO_USER', 'dbt') }}"
+      database: "{{ env_var('DBT_CATALOG', 'lake') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'silver') }}"
+      threads: 4

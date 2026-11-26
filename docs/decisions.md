@@ -20,6 +20,16 @@ que el cambio de negocio. Un proceso aparte (relay) lo publica a Kafka.
 **Consecuencias.** La escritura extra es pequeña (una fila más en la misma transacción) y queda
 contenida porque el outbox se purga a los 7 días. Tenemos un contrato explícito y versionado
 (`schema_version`). La entrega es at-least-once, así que hace falta dedupe aguas abajo (ADR-005).
+**Contrato del mensaje (`audit.events`).** Sobre JSON en snake_case (`event_id`, `event_type`,
+`aggregate_type`, `aggregate_id`, `tenant_id`, `actor_id`, `occurred_at` ISO-8601 UTC con 6 decimales,
+`schema_version`, `payload`, `trace_id`), con `payload` como objeto JSON anidado, idéntico byte a byte
+a la fila del outbox. **El dinero viaja como string JSON con su precisión exacta**
+(`"amount":"12345678.1234"`), nunca como número: casi todo consumidor (Jackson en Spark/Glue,
+JavaScript, herramientas de BI) lee los números JSON como `double`, y lo verificamos en la imagen de
+Glue: `from_json` convertía `12345678.1234` en `1.23456781234E7` y truncaba un monto de 19 dígitos.
+Se implementa con un converter de `decimal` acotado al payload (`DecimalAsStringJsonConverter`), no
+con `JsonNumberHandling` global, para que los enteros como `schemaVersion` sigan siendo números. El
+cambio se hizo antes de existir consumidores, por eso sigue siendo `schema_version = 1`.
 
 ## ADR-002 — Relay con lease, sin transacción abierta durante I/O de red
 **Decisión.** El relay reclama un lote con `UPDATE ... SET LeaseUntil = now+30s OUTPUT inserted.*`
@@ -55,6 +65,15 @@ por DI. Los eventos de dominio pasan al outbox con un `SaveChangesInterceptor`.
 ## ADR-005 — Semántica de entrega: at-least-once + dedupe en silver
 **Decisión.** Bronze es append-only y guarda lo que llegó, con `kafka_partition`/`kafka_offset`.
 Silver (dbt incremental `merge`, `unique_key=event_id`) es la verdad deduplicada.
+**Incremental de silver.** Watermark sobre `ingested_at` (tiempo de llegada) con lookback de 1 h, no
+sobre `occurred_at` (tiempo del evento): un evento tardío (caída de la ingesta, replay, backfill) trae un
+`occurred_at` antiguo y un filtro por tiempo de evento lo descartaría para siempre. El particionado
+sigue siendo `day(occurred_at)`. **Gana la primera entrega** (menor `kafka_offset`): dentro del lote,
+`row_number()` por `event_id`; y los `event_id` ya presentes en silver se excluyen con un anti-join, así
+el `merge` solo inserta y una re-entrega no reemplaza la fila original. El anti-join se acota a las
+particiones de los días del lote (`occurred_at` entre su mínimo y su máximo, que una re-entrega conserva
+porque el evento es inmutable), con las cotas como literales para que Iceberg pode particiones en vez
+de recorrer silver completa en cada corrida (IA-11).
 **Alternativa.** `MERGE` en el streaming hacia bronze. Da dedupe más temprano, pero cada micro-batch
 tiene que leer la tabla destino, lo que agrega costo y latencia y complica el job de Spark.
 **Por qué.** Mantiene a Spark "tonto y confiable" (mover bytes) y pone la semántica en dbt, que es

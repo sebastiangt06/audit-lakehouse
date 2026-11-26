@@ -82,7 +82,7 @@ Formato de cada entrada:
 > - Tests que "pasan" porque no verifican nada (asserts vacíos o mocks de todo).
 
 ### IA-08 · La IA silenció los logs de SQL de toda la app para tapar una carrera ⚠️
-- **Commit:** _por completar_ (paso 02, `feat(dotnet): transactional core with outbox written in the same transaction`)
+- **Commit:** `1fdc25f` (paso 02, `feat(dotnet): transactional core with outbox written in the same transaction`)
 - **Prompt:** `/step 02` → prompt del paso 02 de `docs/PLAN.md` (dominio + API + outbox en la misma transacción).
 - **Respuesta de la IA:** en el plan propuso auto-abrir la cuenta origen si no existía, con reintento
   ante violación de unique (2601/2627) y `ChangeTracker.Clear()`. Aprobé ese plan sin notar el problema de dominio.
@@ -104,7 +104,107 @@ Formato de cada entrada:
     transacciones = filas de outbox para `t3:A7` → `40 / 40`. Cuenta `NOPE9` → `HTTP 422 "Unknown source account"`.
 - **ADR afectado:** ninguno. La auto-apertura de cuentas no estaba en ningún ADR; fue un detalle de implementación del plan.
 
-### IA-09 · _título_
+### IA-09 · La IA configuró xUnit v3 con el runner VSTest, que el SDK de .NET 10 ya no soporta ⚠️
+- **Commit:** `9c82520` (paso 04, `feat(dotnet): load generator and outbox atomicity tests`)
+- **Prompt:** `/step 04` + prompt detallado del paso 04: "Makers.Core.Tests (xUnit, en la solución) … Test de
+  ATOMICIDAD contra el SQL Server real del compose … Si no hay SQL Server disponible, el test se marca como
+  skipped, no como verde … crea scripts/test.sh que corre `dotnet test` dentro de la imagen sdk pinneada".
+- **Respuesta de la IA:** en el plan propuso xUnit v3 (por `Assert.Skip` nativo) corriendo sobre VSTest:
+  `Microsoft.NET.Test.Sdk` 18.12.0 + `xunit.runner.visualstudio` 4.0.1 + `xunit.v3` 4.0.3. Dijo que había
+  verificado las versiones en nuget.org. Solo verificó que existieran, no que fueran compatibles con el
+  runner del SDK de .NET 10. Aprobé el plan sin notarlo.
+- **Problema detectado:** la primera corrida de `bash scripts/test.sh` falló en el build:
+  `error : Testing with VSTest target is no longer supported by Microsoft.Testing.Platform on .NET 10 SDK
+  and later. If you use dotnet test, you should opt-in to the new dotnet test experience.`
+  xUnit v3 4.x corre sobre Microsoft.Testing.Platform (MTP) y el SDK 10.0.404 ya no acepta el modo VSTest para él.
+- **Decisión humana:** pasar a MTP: `src/dotnet/global.json` con `"test": { "runner": "Microsoft.Testing.Platform" }`,
+  quitar los paquetes de VSTest y cambiar el script a `dotnet test --solution Makers.Core.sln`.
+  Lección: la verificación ejecutada atrapa lo que la revisión del plan no ve; por eso cada paso exige
+  salida real.
+- **Evidencia:**
+  - Error y guía oficial: https://aka.ms/dotnet-test-mtp-error (enlace incluido en el propio mensaje de error).
+  - `src/dotnet/global.json:2-4` → opt-in a MTP.
+  - `src/dotnet/Makers.Core.Tests/Makers.Core.Tests.csproj:4-5,13-14` → solo `xunit.v3` + EF InMemory, sin paquetes VSTest.
+  - `scripts/test.sh:49` → `dotnet test --solution Makers.Core.sln -c Release --output Detailed`.
+  - Re-corrida: `Test run summary: Passed! total: 7 failed: 0 succeeded: 7 skipped: 0`, con
+    `passed Makers.Core.Tests.OutboxAtomicityTests.SaveChanges_FailingAfterInsertsBeforeCommit_PersistsNeitherTransactionNorOutboxRow`.
+    Sin la red del compose: `succeeded: 6 skipped: 1`.
+- **ADR afectado:** ninguno. El runner de tests no está en ningún ADR; ADR-004 cubre .NET 10 y la estructura, no el tooling de tests.
+
+### IA-10 · La IA asumió que `from_json` conserva el JSON crudo, y el agente propuso una regex para rodear el problema ⚠️
+- **Commit:** `a1e4dd1` (paso 05, `fix(dotnet): serialize money as exact JSON strings in the event contract`)
+- **Prompt:** `/step 05` + prompt detallado del paso 05, que incluía: "En bronze, payload se guarda como
+  string con el JSON crudo (verifica que from_json con StringType lo preserve así)".
+- **Respuesta de la IA:**
+  1. La IA de diseño (Claude chat), en la revisión del plan del paso 03, afirmó: "Spark, cuando el
+     esquema declara un campo como `string` y recibe un objeto, lo guarda como texto JSON crudo, así que
+     bronze queda en `payload string` y silver lo parsea."
+  2. Claude Code lo probó dentro de `public.ecr.aws/glue/aws-glue-libs:5` antes de escribir el job, y era falso.
+  3. En el plan, Claude Code propuso extraer el payload con
+     `regexp_extract(value, '"payload":(\{.*\}),"trace_id":', 1)`, lo que acopla el contrato al orden de los
+     campos del relay. Como plan B, si la regex no encontraba nada, guardaba el valor de `from_json`, que es
+     justo el que se corrompe, y lo único que dejaba era un contador en el log.
+- **Problema detectado:** Jackson reserializa los números JSON como `double`: `12345678.1234` →
+  `1.23456781234E7`, y `123456789012345.6789` → `1.2345678901234567E14` (pierde precisión). La regex no
+  arreglaba la causa: cualquier otro consumidor que lea el payload como números seguiría corrompiendo
+  los montos, y el plan B metía en bronze datos alterados sin marcarlos en la tabla.
+- **Decisión humana:** rechacé la regex y el plan B, y corregí la causa en el contrato. Los montos viajan
+  como string JSON con su precisión exacta (`"amount":"12345678.1234"`), que es la convención para dinero.
+  Se hizo con un converter de `decimal` en System.Text.Json, no con `JsonNumberHandling` global. Con eso,
+  `from_json` con `StringType` es fiel sin regex. Hice `down -v` para que bronze no mezclara montos
+  numéricos y montos como string. Lección: una afirmación técnica de la IA no es evidencia hasta que se ejecuta.
+- **Evidencia:**
+  - Prueba en la imagen de Glue (antes del cambio):
+    `FROM_JSON : {"amount":1.23456781234E7,...,"big":1.2345678901234567E14,...}` frente a
+    `EXPECTED  : {"amount":12345678.1234,...,"big":123456789012345.6789,...}`.
+  - `src/dotnet/Makers.Core.Api/Infrastructure/Outbox/DecimalAsStringJsonConverter.cs:15,29` → converter.
+  - `src/dotnet/Makers.Core.Api/Infrastructure/Outbox/OutboxInterceptor.cs:21-23` → solo en las opciones del payload.
+  - `src/dotnet/Makers.Core.Tests/OutboxInterceptorTests.cs:55-58` → `SaveChanges_PayloadCarriesAmountAsExactString`
+    con `12345678.1234`, `123456789012345.6789` y `150000`: passed (10/10 en `bash scripts/test.sh`).
+  - `lakehouse/glue/tests/test_ingest_audit_stream.py:56,66` → `test_money_as_string_reaches_bronze_payload_identical`
+    (los 2 montos) y `test_money_as_json_number_would_be_corrupted`: `6 passed`.
+  - End-to-end tras `down -v`: el payload de Kafka (partición 0, offset 2) comparado con bronze da
+    `IDENTICAL (byte-for-byte)`, con `"amount":"64348611"`. Bronze: 2500/2500 con amount como string.
+- **ADR afectado:** ADR-001. Ya se actualizó en este mismo commit con la sección "Contrato del mensaje"
+  (`docs/decisions.md:23-32`); lo pedí explícitamente.
+
+### IA-11 · El PLAN filtraba el incremental de silver por `occurred_at` y perdía para siempre los eventos tardíos ⚠️
+- **Commit:** `f7bceed` (paso 06, `feat(dbt): silver/gold models on iceberg via trino with data quality tests`)
+- **Prompt:** `/step 06`, prompt del paso en `docs/PLAN.md` (escrito con la IA de diseño), que pedía:
+  "Filtro incremental con ventana de lookback de 1h sobre occurred_at para eventos tardíos." Mi prompt del
+  paso lo repetía: "lookback de 1h para eventos tardíos".
+- **Respuesta de la IA:** Claude Code, en el plan y antes de escribir código, marcó el choque: un evento que
+  llega más de 1 h tarde trae un `occurred_at` antiguo y el filtro lo descarta para siempre. Pasa tras una
+  caída de Glue de más de 1 h, en un replay (paso 10) o con el backfill de meses legados (paso 09).
+  `assert_no_event_loss` no lo detectaría si el outbox ya se purgó; y en el backfill del paso 09 esos
+  eventos ni siquiera pasan por el outbox, así que el test tampoco los vería aunque el outbox no se hubiera
+  purgado. Propuso un watermark sobre `ingested_at` (cuándo llegó), conservando el particionado
+  `day(occurred_at)`, y excluir del lote los `event_id` que ya están en silver, para que el `merge` no
+  reemplace la primera entrega (menor `kafka_offset`) por una re-entrega posterior.
+- **Problema detectado:** el error estaba en el PLAN, no en el código: confundía el tiempo del evento con el
+  tiempo de llegada. Los eventos tardíos son justo los que un lookback sobre `occurred_at` no puede ver.
+- **Decisión humana:** aprobé el watermark sobre `ingested_at` con lookback de 1 h y el anti-join, y agregué
+  una condición: el anti-join solo mira las particiones de los días del lote (`occurred_at` entre el mínimo y
+  el máximo del lote, que una re-entrega conserva porque el evento es inmutable). Así Iceberg poda
+  particiones y no se recorre silver completa en cada corrida. Lección: el tiempo del evento y el tiempo de
+  llegada son relojes distintos; el incremental se filtra por el de llegada.
+- **Evidencia:**
+  - `docs/PLAN.md:222` → la instrucción del paso 06, ya corregida a `ingested_at` con nota a esta entrada.
+  - `lakehouse/dbt/models/silver/audit_events.sql:20-34` → las tres decisiones documentadas en el modelo;
+    `:56` watermark sobre `ingested_at`; `:67` primera entrega por `kafka_offset`; `:98` anti-join con cotas.
+  - SQL compilado: `where s.occurred_at between timestamp '2026-11-26 14:50:26.384783 UTC' and timestamp
+    '2026-11-26 14:52:58.972558 UTC'` → cotas como literales (poda en planificación).
+  - `EXPLAIN ANALYZE` del scan de silver: día sin datos (2026-11-20) → `Input: 0 rows (0B)`, sin input físico;
+    día del lote (2026-11-26) → `Input: 2502 rows`, `Physical input: 279.39kB`.
+  - Dedupe: 3 copias con `kafka_offset + 1000000` en bronze (2505 filas / 2502 distintos) → `dbt build`
+    incremental `MERGE (0 rows)` y `--full-refresh` `CREATE TABLE (2_502 rows)`; en ambos, silver 2502/2502
+    con los offsets originales (3, 2, 1) y `unique` en PASS.
+  - Límite honesto: el escenario de pérdida (un evento que llega más de 1 h tarde) se razonó, pero no se
+    reprodujo con una prueba. Lo verificado es la idempotencia, la primera entrega y la poda.
+- **ADR afectado:** ADR-005 (dedupe en silver), actualizado en el mismo commit: watermark sobre `ingested_at`
+  con lookback de 1 h y regla de primera entrega con anti-join acotado a las particiones del lote.
+
+### IA-12 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**
@@ -115,6 +215,11 @@ Formato de cada entrada:
 ---
 
 ## Métricas de uso (completar al final)
-- Commits asistidos por IA: _n_ / _total_
-- Correcciones humanas registradas: _n_
-- Tiempo estimado ahorrado vs. tiempo invertido en verificar: _..._
+- Commits asistidos por IA: 9 / 11 commits sin merge hasta `f7bceed` (los que llevan el trailer
+  `Co-Authored-By: Claude`; `git log --format='%(trailers:key=Co-Authored-By)'`). Los 2 restantes
+  (`8116cde`, `3eb152f`) son la inicialización manual del repo.
+- Entradas registradas: 11. Correcciones humanas a output de la IA (⚠️): 7, de las cuales 3 en
+  diseño (IA-02, IA-03, IA-07) y 4 en implementación (IA-08 a IA-11). Las otras 4 (IA-01, IA-04,
+  IA-05, IA-06) son verificaciones o decisiones de diseño sin error de la IA.
+- Tiempo ahorrado vs. tiempo invertido en verificar: **no medido**. No registré tiempos por paso,
+  así que no doy una cifra.

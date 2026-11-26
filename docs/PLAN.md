@@ -219,7 +219,9 @@ Modelos:
   from, to), normalización.
 - silver/audit_events: incremental, incremental_strategy=merge, unique_key=event_id,
   on_schema_change=append_new_columns, properties partitioning day(occurred_at), formato parquet.
-  Filtro incremental con ventana de lookback de 1h sobre occurred_at para eventos tardíos.
+  Filtro incremental con ventana de lookback de 1h sobre ingested_at para eventos tardíos
+  (nota: el PLAN original decía occurred_at, que descarta para siempre los eventos que llegan
+  más de 1h tarde; corregido en la implementación, ver docs/ai-log.md IA-11).
   Dedupe con row_number() sobre event_id (quedarse con el menor kafka_offset).
 - gold/daily_activity_by_tenant y gold/high_value_transactions (monto >= 10.000.000 COP — reporte
   regulatorio de ejemplo).

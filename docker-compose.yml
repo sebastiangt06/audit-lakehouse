@@ -57,6 +57,7 @@ services:
   core-api:
     build:
       context: ./src/dotnet
+      target: api
     image: audit-lakehouse/core:local
     depends_on:
       sqlserver-init:
@@ -82,6 +83,7 @@ services:
   outbox-relay:
     build:
       context: ./src/dotnet
+      target: api
     image: audit-lakehouse/core:local
     depends_on:
       sqlserver-init:
@@ -99,6 +101,21 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Load generator (profile "tools": never started by `up`, only by `make load`).
+  # Own target of the same Dockerfile; args: --count N --parallel P [--base-url URL].
+  # ---------------------------------------------------------------------------
+  loadgen:
+    build:
+      context: ./src/dotnet
+      target: loadgen
+    image: audit-lakehouse/loadgen:local
+    profiles: ["tools"]
+    depends_on:
+      core-api:
+        condition: service_healthy
+    restart: "no"
 
   # ---------------------------------------------------------------------------
   # Durable buffer + replay window (KRaft, single node)
@@ -237,8 +254,111 @@ services:
       retries: 12
       start_period: 15s
 
+  # ---------------------------------------------------------------------------
+  # AWS Glue 5.0 (official image, Spark local[*]): Kafka -> Iceberg bronze (ADR-011)
+  # mem_limit 2g: spark.driver.memory=1g (JVM heap; local mode runs driver + executors in it)
+  # + metaspace/off-heap/Netty + the Python worker ~= 1.6 GB; 2g leaves headroom without
+  # starving SQL Server (2g) and Kafka on an 8 GB host.
+  # ---------------------------------------------------------------------------
+  glue-ingest:
+    build:
+      context: ./lakehouse/glue
+    image: audit-lakehouse/glue:local
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      iceberg-rest:
+        condition: service_healthy
+    environment: &glue-env
+      # Dummy local credentials (S3FileIO default chain). In AWS Glue: the job's IAM role.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: ${AWS_REGION}
+      # Never query the EC2 metadata endpoint for credentials/region (we are not on AWS).
+      AWS_EC2_METADATA_DISABLED: "true"
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      AUDIT_TOPIC: ${AUDIT_TOPIC}
+      INGEST_TRIGGER_SECONDS: ${INGEST_TRIGGER_SECONDS}
+      MAX_OFFSETS_PER_TRIGGER: ${MAX_OFFSETS_PER_TRIGGER}
+      CHECKPOINT_DIR: /checkpoints/audit_bronze
+    command: ["spark-submit", "jobs/ingest_audit_stream.py", "--JOB_NAME", "ingest_audit_stream"]
+    volumes:
+      - glue-checkpoints:/checkpoints
+    mem_limit: 2g
+    # A failed query exits the container; on restart it resumes from the checkpoint (no loss, no dup).
+    restart: on-failure
+
+  # One-off Glue jobs and spark-sql (maintenance, backfill, demos):
+  #   docker compose run --rm glue-jobs spark-submit jobs/create_tables.py --JOB_NAME create_tables
+  #   docker compose run --rm glue-jobs spark-sql -e "select count(*) from lake.audit.events_bronze"
+  glue-jobs:
+    build:
+      context: ./lakehouse/glue
+    image: audit-lakehouse/glue:local
+    profiles: ["tools"]
+    depends_on:
+      iceberg-rest:
+        condition: service_healthy
+    environment: *glue-env
+    volumes:
+      - glue-checkpoints:/checkpoints
+    mem_limit: 2g
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Trino: SQL engine for dbt over Iceberg + `sqlserver` catalog for reconciliation (ADR-009)
+  # mem_limit 1536m: -Xmx1G heap (infra/trino/jvm.config) + 256M code cache + metaspace/direct
+  # buffers. Query memory per node defaults to 30% of heap: plenty for the PoC volume.
+  # ---------------------------------------------------------------------------
+  trino:
+    image: trinodb/trino:484
+    depends_on:
+      iceberg-rest:
+        condition: service_healthy
+      sqlserver-init:
+        condition: service_completed_successfully
+    environment:
+      # Referenced as ${ENV:...} in infra/trino/catalog/*.properties.
+      AWS_REGION: ${AWS_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      CORE_DB: ${CORE_DB}
+      SA_PASSWORD: ${SA_PASSWORD}
+    ports:
+      - "${TRINO_PORT}:8080"
+    volumes:
+      - ./infra/trino/catalog:/etc/trino/catalog:ro
+      - ./infra/trino/jvm.config:/etc/trino/jvm.config:ro
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  # dbt (dbt-core + dbt-trino): staging -> silver -> gold + data quality tests.
+  #   docker compose run --rm dbt build | docker compose run --rm dbt docs generate
+  # The project is bind-mounted so docs (target/) land on the host (git-ignored).
+  dbt:
+    build:
+      context: ./lakehouse/dbt
+    image: audit-lakehouse/dbt:local
+    profiles: ["tools"]
+    depends_on:
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_HOST: trino
+      TRINO_HTTP_PORT: "8080"
+      DBT_CATALOG: lake
+    volumes:
+      - ./lakehouse/dbt:/usr/app
+    restart: "no"
+
 volumes:
   sqlserver-data:
   kafka-data:
   seaweedfs-data:
   iceberg-catalog:
+  glue-checkpoints:
