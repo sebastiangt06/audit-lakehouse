@@ -254,8 +254,60 @@ services:
       retries: 12
       start_period: 15s
 
+  # ---------------------------------------------------------------------------
+  # AWS Glue 5.0 (official image, Spark local[*]): Kafka -> Iceberg bronze (ADR-011)
+  # mem_limit 2g: spark.driver.memory=1g (JVM heap; local mode runs driver + executors in it)
+  # + metaspace/off-heap/Netty + the Python worker ~= 1.6 GB; 2g leaves headroom without
+  # starving SQL Server (2g) and Kafka on an 8 GB host.
+  # ---------------------------------------------------------------------------
+  glue-ingest:
+    build:
+      context: ./lakehouse/glue
+    image: audit-lakehouse/glue:local
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      iceberg-rest:
+        condition: service_healthy
+    environment: &glue-env
+      # Dummy local credentials (S3FileIO default chain). In AWS Glue: the job's IAM role.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: ${AWS_REGION}
+      # Never query the EC2 metadata endpoint for credentials/region (we are not on AWS).
+      AWS_EC2_METADATA_DISABLED: "true"
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      AUDIT_TOPIC: ${AUDIT_TOPIC}
+      INGEST_TRIGGER_SECONDS: ${INGEST_TRIGGER_SECONDS}
+      MAX_OFFSETS_PER_TRIGGER: ${MAX_OFFSETS_PER_TRIGGER}
+      CHECKPOINT_DIR: /checkpoints/audit_bronze
+    command: ["spark-submit", "jobs/ingest_audit_stream.py", "--JOB_NAME", "ingest_audit_stream"]
+    volumes:
+      - glue-checkpoints:/checkpoints
+    mem_limit: 2g
+    # A failed query exits the container; on restart it resumes from the checkpoint (no loss, no dup).
+    restart: on-failure
+
+  # One-off Glue jobs and spark-sql (maintenance, backfill, demos):
+  #   docker compose run --rm glue-jobs spark-submit jobs/create_tables.py --JOB_NAME create_tables
+  #   docker compose run --rm glue-jobs spark-sql -e "select count(*) from lake.audit.events_bronze"
+  glue-jobs:
+    build:
+      context: ./lakehouse/glue
+    image: audit-lakehouse/glue:local
+    profiles: ["tools"]
+    depends_on:
+      iceberg-rest:
+        condition: service_healthy
+    environment: *glue-env
+    volumes:
+      - glue-checkpoints:/checkpoints
+    mem_limit: 2g
+    restart: "no"
+
 volumes:
   sqlserver-data:
   kafka-data:
   seaweedfs-data:
   iceberg-catalog:
+  glue-checkpoints:

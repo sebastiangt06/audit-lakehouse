@@ -29,6 +29,10 @@ flowchart LR
 **Prerrequisitos:** Docker Desktop / Engine con ≥ 8 GB de RAM asignados, `make`, `git`.
 (Apple Silicon: SQL Server corre emulado; activa Rosetta en Docker Desktop.)
 
+> **El primer `make up` tarda.** El motor Spark es la imagen oficial de AWS Glue 5.0
+> (`public.ecr.aws/glue/aws-glue-libs:5`, pinneada por digest), que pesa **~12 GB**. El pull es
+> anónimo desde ECR Public (sin cuenta AWS) y solo ocurre la primera vez.
+
 ```bash
 git clone <repo> && cd <repo>
 cp .env.example .env
@@ -48,6 +52,9 @@ puede correr sin `make` (por ejemplo, en Windows sin make instalado) con el coma
 | `make clean` | `docker compose down -v` | Detiene y **borra los volúmenes** (todos los datos locales) |
 | `make load N=5000 P=20` | `docker compose run --rm loadgen --count 5000 --parallel 20` | N `POST /transactions` con paralelismo P (defaults N=1000, P=10); imprime códigos HTTP, req/s y latencias p50/p95/p99. Sale ≠0 si hubo algún 5xx |
 | `make test` | `bash scripts/test.sh` | `dotnet test` dentro de la imagen SDK pinneada (no requiere SDK local). Con `make up` corriendo incluye el test de atomicidad contra SQL Server real; sin él, ese test sale **skipped**. Cache NuGet en el volumen `audit-lakehouse_nuget-cache` (no lo borra `make clean`) |
+| _(sin target)_ | `docker compose run --rm glue-jobs spark-submit jobs/create_tables.py --JOB_NAME create_tables` | Job Glue: crea `lake.audit.events_bronze` (idempotente; `glue-ingest` también lo invoca al arrancar) |
+| _(sin target)_ | `docker compose run --rm glue-jobs spark-sql -e "select count(*) from lake.audit.events_bronze"` | SQL sobre el lakehouse con el motor Glue/Spark |
+| _(sin target)_ | `docker compose run --rm --no-deps glue-jobs spark-submit tests/test_ingest_audit_stream.py` | Tests de las funciones puras PySpark (fidelidad del payload, linaje, DDL) |
 | `make demo` | _(paso 06)_ | Flujo end-to-end |
 | `make chaos` | _(paso 10)_ | Cero pérdida con caída de ingesta y de Kafka |
 | `make replay FROM=...` | _(paso 10)_ | Replay desde Kafka / outbox |
