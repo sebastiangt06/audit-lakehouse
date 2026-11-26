@@ -53,6 +53,20 @@ Formato de cada entrada:
   free tier en 2025.
 - **Decisión humana:** imágenes oficiales `apache/*`.
 
+### IA-07 · La IA redujo "AWS Glue" a "solo el catálogo" y redactó una regla ambigua ⚠️
+- **Contexto:** al revisar con Claude Code el resumen de las "restricciones duras" de CLAUDE.md,
+  la regla 2 decía "Prohibido: … bitnami/* (se usan imágenes apache/*)". Leída rápido, parecía
+  prohibir las imágenes de Apache, justo el stack que exige la prueba.
+- **Pregunta humana:** "La prueba pide Spark, Iceberg, dbt y AWS Glue. ¿Está usando todo eso?"
+- **Problema detectado:** (1) la regla mezclaba proveedores de imágenes prohibidos con las
+  tecnologías obligatorias; (2) el diseño inicial cubría Glue solo como "catálogo equivalente en
+  producción", más débil que lo que pide el enunciado ("AWS Glue dockerizado localmente").
+- **Decisión humana:** reescribí la regla 2 para separar "stack obligatorio" de "empaquetadores
+  prohibidos", y el motor Spark pasó a ser la imagen oficial AWS Glue 5.0
+  (public.ecr.aws/glue/aws-glue-libs:5), con los jobs escritos como jobs Glue. → ADR-011.
+- **Lección:** las instrucciones para un agente necesitan la misma revisión que el código: una regla
+  ambigua en CLAUDE.md se propaga a cada paso.
+
 ---
 
 ## Fase 2 — Implementación (Claude Code)
@@ -67,7 +81,7 @@ Formato de cada entrada:
 > - Replay "reseteando el consumer group" cuando Structured Streaming guarda offsets en el checkpoint.
 > - Tests que "pasan" porque no verifican nada (asserts vacíos o mocks de todo).
 
-### IA-07 · _título_
+### IA-08 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**
