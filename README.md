@@ -37,15 +37,22 @@ make demo    # flujo end-to-end: carga → outbox → kafka → iceberg → dbt 
 ```
 <!-- TODO: puertos, qué ver en cada paso, tiempos aproximados -->
 
-| Comando | Qué demuestra |
-|---|---|
-| `make demo` | Flujo end-to-end |
-| `make chaos` | Cero pérdida con caída de ingesta y de Kafka |
-| `make replay FROM=...` | Replay desde Kafka / outbox |
-| `make maintenance` | Small files: antes/después de la compactación |
-| `make evolve` | Evolución de esquema v1→v2 + time travel |
-| `make lifecycle` | Backfill verificado + purga segura en SQL Server |
-| `make metrics` | Números para el análisis costo-beneficio |
+Cada target de `make` solo llama a `docker compose ...` o a `bash scripts/<x>.sh`, así que todo se
+puede correr sin `make` (por ejemplo, en Windows sin make instalado) con el comando equivalente:
+
+| Comando | Sin make | Qué hace / demuestra |
+|---|---|---|
+| `make help` | `bash scripts/help.sh` | Lista los targets |
+| `make up` | `docker compose up -d --wait` | Levanta todo y espera a que esté healthy (requiere `.env`) |
+| `make down` | `docker compose down` | Detiene los servicios, conserva los volúmenes |
+| `make clean` | `docker compose down -v` | Detiene y **borra los volúmenes** (todos los datos locales) |
+| `make demo` | _(paso 06)_ | Flujo end-to-end |
+| `make chaos` | _(paso 10)_ | Cero pérdida con caída de ingesta y de Kafka |
+| `make replay FROM=...` | _(paso 10)_ | Replay desde Kafka / outbox |
+| `make maintenance` | _(paso 07)_ | Small files: antes/después de la compactación |
+| `make evolve` | _(paso 08)_ | Evolución de esquema v1→v2 + time travel |
+| `make lifecycle` | _(paso 09)_ | Backfill verificado + purga segura en SQL Server |
+| `make metrics` | _(paso 12)_ | Números para el análisis costo-beneficio |
 
 ## 2. Servicios
 <!-- TODO: tabla servicio / imagen:tag / puerto / rol -->
@@ -128,3 +135,7 @@ Demostrado en `make chaos`: <!-- TODO: resultados -->
 ## 6. Limitaciones del PoC y camino a producción en AWS
 <!-- TODO: Spark local → EMR Serverless/Glue jobs; Kafka → MSK; REST → Glue Catalog; Trino → Athena;
 SeaweedFS → S3; secretos → Secrets Manager; Lake Formation; observabilidad; Object Lock -->
+- **Dead-letter del outbox.** En el PoC, una fila que llega a `Attempts >= 10` solo genera un log
+  `Warning` con su `EventId` y `LastError` (candidata a dead-letter) y se queda en la cola. En
+  producción se movería a una tabla `outbox.DeadLetter` o a un topic `audit.events.dlq`, con una
+  alarma y un procedimiento de re-drive, para que un mensaje envenenado no se reintente para siempre.

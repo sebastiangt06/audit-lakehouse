@@ -78,7 +78,7 @@ Requisito host: Docker con ≥ 8 GB RAM. SQL Server es solo amd64 (en Apple Sili
 ```
 .
 ├─ CLAUDE.md
-├─ .claude/commands/    # /paso <n> y /ai-log <texto> (settings.local.json NO se commitea)
+├─ .claude/commands/    # /step <n> y /ai-log <texto> (settings.local.json NO se commitea)
 ├─ README.md
 ├─ Makefile
 ├─ docker-compose.yml

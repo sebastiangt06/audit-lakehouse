@@ -53,6 +53,20 @@ Formato de cada entrada:
   free tier en 2025.
 - **Decisión humana:** imágenes oficiales `apache/*`.
 
+### IA-07 · La IA redujo "AWS Glue" a "solo el catálogo" y redactó una regla ambigua ⚠️
+- **Contexto:** al revisar con Claude Code el resumen de las "restricciones duras" de CLAUDE.md,
+  la regla 2 decía "Prohibido: … bitnami/* (se usan imágenes apache/*)". Leída rápido, parecía
+  prohibir las imágenes de Apache, justo el stack que exige la prueba.
+- **Pregunta humana:** "La prueba pide Spark, Iceberg, dbt y AWS Glue. ¿Está usando todo eso?"
+- **Problema detectado:** (1) la regla mezclaba proveedores de imágenes prohibidos con las
+  tecnologías obligatorias; (2) el diseño inicial cubría Glue solo como "catálogo equivalente en
+  producción", más débil que lo que pide el enunciado ("AWS Glue dockerizado localmente").
+- **Decisión humana:** reescribí la regla 2 para separar "stack obligatorio" de "empaquetadores
+  prohibidos", y el motor Spark pasó a ser la imagen oficial AWS Glue 5.0
+  (public.ecr.aws/glue/aws-glue-libs:5), con los jobs escritos como jobs Glue. → ADR-011.
+- **Lección:** las instrucciones para un agente necesitan la misma revisión que el código: una regla
+  ambigua en CLAUDE.md se propaga a cada paso.
+
 ---
 
 ## Fase 2 — Implementación (Claude Code)
@@ -67,7 +81,30 @@ Formato de cada entrada:
 > - Replay "reseteando el consumer group" cuando Structured Streaming guarda offsets en el checkpoint.
 > - Tests que "pasan" porque no verifican nada (asserts vacíos o mocks de todo).
 
-### IA-07 · _título_
+### IA-08 · La IA silenció los logs de SQL de toda la app para tapar una carrera ⚠️
+- **Commit:** _por completar_ (paso 02, `feat(dotnet): transactional core with outbox written in the same transaction`)
+- **Prompt:** `/step 02` → prompt del paso 02 de `docs/PLAN.md` (dominio + API + outbox en la misma transacción).
+- **Respuesta de la IA:** en el plan propuso auto-abrir la cuenta origen si no existía, con reintento
+  ante violación de unique (2601/2627) y `ChangeTracker.Clear()`. Aprobé ese plan sin notar el problema de dominio.
+  En una prueba de 40 requests en paralelo sobre una cuenta nueva, todas respondieron 201, pero EF Core
+  registró las 12 carreras como `fail:` con stack trace (120 líneas del log contenían `fail`/`exception`).
+  Para limpiar el log, la IA subió a `Critical` las categorías `Microsoft.EntityFrameworkCore.Database.Command`
+  y `Microsoft.EntityFrameworkCore.Update`, y lo presentó como resuelto.
+- **Problema detectado:** eso ocultaba todos los errores de SQL de la app, incluidos deadlocks,
+  timeouts y los del relay (paso 03). Además, la causa era de dominio: un core no abre cuentas al recibir una transferencia.
+- **Decisión humana:** rechacé el silenciado y ataqué la causa: sin auto-apertura de cuentas (se
+  eliminaron el reintento por `DuplicateKeyException` y `Reset()`), cuentas `A1..A50` y `B1..B50` para
+  `t1..t5` sembradas de forma idempotente en `init.sql`, y **422** con ProblemDetails si la cuenta
+  origen no existe. Restauré los niveles de log. Ocultar el síntoma no es una solución.
+- **Evidencia:**
+  - `src/dotnet/Makers.Core.Api/appsettings.json:6` → `Database.Command` en `Warning`, sin entrada para `Update`.
+  - `infra/sqlserver/init.sql:68-77` → seed idempotente de cuentas.
+  - `src/dotnet/Makers.Core.Api/Application/RegisterTransactionHandler.cs:34` y `Program.cs:57` → 422.
+  - Re-prueba con 40 requests en paralelo sobre `t3:A7`: `40 201`; `docker compose logs core-api | grep -c "fail:"` → `0`;
+    transacciones = filas de outbox para `t3:A7` → `40 / 40`. Cuenta `NOPE9` → `HTTP 422 "Unknown source account"`.
+- **ADR afectado:** ninguno. La auto-apertura de cuentas no estaba en ningún ADR; fue un detalle de implementación del plan.
+
+### IA-09 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**

@@ -1,0 +1,40 @@
+# --- Secrets / local config ---
+.env
+.claude/settings.local.json
+
+# --- .NET ---
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.trx
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- dbt ---
+lakehouse/dbt/target/
+lakehouse/dbt/logs/
+lakehouse/dbt/dbt_packages/
+lakehouse/dbt/.user.yml
+
+# --- Local volumes / runtime data (bind mounts, checkpoints, spark warehouse) ---
+data/
+checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
