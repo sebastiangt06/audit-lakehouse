@@ -24,46 +24,68 @@ if (args is ["healthcheck", ..])
 }
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Same image, two roles (Role=Api | Role=Relay). The relay never runs inside the API process:
+// a slow Kafka must not compete for the API's threads, and each role scales on its own.
+var role = Enum.Parse<HostRole>(builder.Configuration["Role"] ?? nameof(HostRole.Api), ignoreCase: true);
+
 builder.Services.AddCore(builder.Configuration);
 builder.Services.AddProblemDetails();
+if (role == HostRole.Relay)
+{
+    builder.Services.AddOutboxRelay(builder.Configuration);
+}
 
 var app = builder.Build();
 
+// Both roles expose /health (container healthcheck); only the API maps business endpoints.
 app.MapHealthChecks("/health");
 
-app.MapPost("/transactions", async (
-    TransactionRequest request,
-    HttpContext http,
-    RegisterTransactionHandler handler,
-    CancellationToken cancellationToken) =>
+if (role == HostRole.Api)
 {
-    var errors = request.Validate();
-    if (errors.Count > 0)
-    {
-        return Results.ValidationProblem(errors);
-    }
-
-    var actorId = http.Request.Headers["X-Actor-Id"].FirstOrDefault() is { Length: > 0 } actor ? actor : "anonymous";
-    var command = new RegisterTransactionCommand(
-        request.TenantId!, request.From!, request.To!, request.Amount!.Value, request.Currency!.ToUpperInvariant(), actorId);
-
-    try
-    {
-        var result = await handler.HandleAsync(command, cancellationToken);
-        return Results.Created($"/transactions/{result.TransactionId}", result);
-    }
-    catch (AccountNotFoundException ex)
-    {
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status422UnprocessableEntity, title: "Unknown source account");
-    }
-    catch (DomainException ex)
-    {
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
-    }
-});
+    MapTransactionEndpoints(app);
+}
 
 await app.RunAsync();
 return 0;
+
+static void MapTransactionEndpoints(WebApplication app) =>
+    app.MapPost("/transactions", async (
+        TransactionRequest request,
+        HttpContext http,
+        RegisterTransactionHandler handler,
+        CancellationToken cancellationToken) =>
+    {
+        var errors = request.Validate();
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(errors);
+        }
+
+        var actorId = http.Request.Headers["X-Actor-Id"].FirstOrDefault() is { Length: > 0 } actor ? actor : "anonymous";
+        var command = new RegisterTransactionCommand(
+            request.TenantId!, request.From!, request.To!, request.Amount!.Value, request.Currency!.ToUpperInvariant(), actorId);
+
+        try
+        {
+            var result = await handler.HandleAsync(command, cancellationToken);
+            return Results.Created($"/transactions/{result.TransactionId}", result);
+        }
+        catch (AccountNotFoundException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status422UnprocessableEntity, title: "Unknown source account");
+        }
+        catch (DomainException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+    });
+
+internal enum HostRole
+{
+    Api,
+    Relay,
+}
 
 internal sealed record TransactionRequest(string? TenantId, string? From, string? To, decimal? Amount, string? Currency)
 {

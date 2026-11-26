@@ -76,6 +76,31 @@ services:
       start_period: 15s
 
   # ---------------------------------------------------------------------------
+  # Outbox relay: SAME image as core-api, Role=Relay (ADR-002).
+  # Lease-based claim, publish with no open transaction, ack per message. At-least-once.
+  # ---------------------------------------------------------------------------
+  outbox-relay:
+    build:
+      context: ./src/dotnet
+    image: audit-lakehouse/core:local
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      Role: Relay
+      ConnectionStrings__Core: "Server=sqlserver,1433;Database=${CORE_DB};User Id=sa;Password=${SA_PASSWORD};Encrypt=True;TrustServerCertificate=True"
+      Kafka__BootstrapServers: ${KAFKA_BOOTSTRAP}
+      Kafka__AuditTopic: ${AUDIT_TOPIC}
+    healthcheck:
+      test: ["CMD", "dotnet", "/app/Makers.Core.Api.dll", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
   # Durable buffer + replay window (KRaft, single node)
   # ---------------------------------------------------------------------------
   kafka:

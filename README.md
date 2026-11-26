@@ -135,3 +135,7 @@ Demostrado en `make chaos`: <!-- TODO: resultados -->
 ## 6. Limitaciones del PoC y camino a producción en AWS
 <!-- TODO: Spark local → EMR Serverless/Glue jobs; Kafka → MSK; REST → Glue Catalog; Trino → Athena;
 SeaweedFS → S3; secretos → Secrets Manager; Lake Formation; observabilidad; Object Lock -->
+- **Dead-letter del outbox.** En el PoC, una fila que llega a `Attempts >= 10` solo genera un log
+  `Warning` con su `EventId` y `LastError` (candidata a dead-letter) y se queda en la cola. En
+  producción se movería a una tabla `outbox.DeadLetter` o a un topic `audit.events.dlq`, con una
+  alarma y un procedimiento de re-drive, para que un mensaje envenenado no se reintente para siempre.
