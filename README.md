@@ -72,6 +72,26 @@ cp .env.example .env     # valores dummy, solo locales
 make up                  # docker compose up -d --build --wait
 make demo                # bash scripts/e2e_demo.sh
 ```
+**Windows con PowerShell** (sin make ni Git Bash abierto; solo necesitas Git for Windows instalado):
+
+```powershell
+git clone https://github.com/sebastiangt06/audit-lakehouse.git; cd audit-lakehouse
+Copy-Item .env.example .env
+docker compose up -d --build --wait
+& "C:\Program Files\Git\bin\bash.exe" scripts/e2e_demo.sh     # demo end-to-end
+```
+
+| Qué | PowerShell |
+|---|---|
+| Levantar | `docker compose up -d --build --wait` |
+| Demo end-to-end | `& "C:\Program Files\Git\bin\bash.exe" scripts/e2e_demo.sh` |
+| Carga | `docker compose run --rm loadgen --count 5000 --parallel 20` |
+| dbt build | `docker compose run --rm dbt build` |
+| Tests .NET | `& "C:\Program Files\Git\bin\bash.exe" scripts/test.sh` |
+| Detener / borrar datos | `docker compose down` / `docker compose down -v` |
+
+> En PowerShell, `bash` a secas apunta a WSL y falla si no tienes una distro instalada; por eso se invoca el `bash.exe` de Git.
+> Si Git está instalado en otra ruta: `(Get-Command git).Source` te dice dónde (el `bash.exe` está en `..\bin\` respecto a `cmd\git.exe`).
 
 `make demo` carga 1000 transacciones, espera por Trino a que bronze tenga todo lo que el outbox despachó
 (timeout de 3 min; con el trigger de 60 s tardó entre 51 y 88 s en mis corridas), corre
