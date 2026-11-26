@@ -15,7 +15,13 @@ namespace Makers.Core.Api.Infrastructure.Outbox;
 /// </summary>
 public sealed class OutboxInterceptor : SaveChangesInterceptor
 {
-    private static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web);
+    // Payload contract: camelCase, money as exact strings (see DecimalAsStringJsonConverter).
+    // The relay embeds these bytes unchanged in the Kafka envelope, so the outbox row and the
+    // message carry the same payload.
+    private static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new DecimalAsStringJsonConverter() },
+    };
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {

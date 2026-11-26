@@ -131,7 +131,44 @@ Formato de cada entrada:
     Sin la red del compose: `succeeded: 6 skipped: 1`.
 - **ADR afectado:** ninguno. El runner de tests no está en ningún ADR; ADR-004 cubre .NET 10 y la estructura, no el tooling de tests.
 
-### IA-10 · _título_
+### IA-10 · La IA asumió que `from_json` conserva el JSON crudo, y el agente propuso una regex para rodear el problema ⚠️
+- **Commit:** _por completar_ (paso 05, `fix(dotnet): serialize money as exact JSON strings in the event contract`)
+- **Prompt:** `/step 05` + prompt detallado del paso 05, que incluía: "En bronze, payload se guarda como
+  string con el JSON crudo (verifica que from_json con StringType lo preserve así)".
+- **Respuesta de la IA:**
+  1. La IA de diseño (Claude chat), en la revisión del plan del paso 03, afirmó: "Spark, cuando el
+     esquema declara un campo como `string` y recibe un objeto, lo guarda como texto JSON crudo, así que
+     bronze queda en `payload string` y silver lo parsea."
+  2. Claude Code lo probó dentro de `public.ecr.aws/glue/aws-glue-libs:5` antes de escribir el job, y era falso.
+  3. En el plan, Claude Code propuso extraer el payload con
+     `regexp_extract(value, '"payload":(\{.*\}),"trace_id":', 1)`, lo que acopla el contrato al orden de los
+     campos del relay. Como plan B, si la regex no encontraba nada, guardaba el valor de `from_json`, que es
+     justo el que se corrompe, y lo único que dejaba era un contador en el log.
+- **Problema detectado:** Jackson reserializa los números JSON como `double`: `12345678.1234` →
+  `1.23456781234E7`, y `123456789012345.6789` → `1.2345678901234567E14` (pierde precisión). La regex no
+  arreglaba la causa: cualquier otro consumidor que lea el payload como números seguiría corrompiendo
+  los montos, y el plan B metía en bronze datos alterados sin marcarlos en la tabla.
+- **Decisión humana:** rechacé la regex y el plan B, y corregí la causa en el contrato. Los montos viajan
+  como string JSON con su precisión exacta (`"amount":"12345678.1234"`), que es la convención para dinero.
+  Se hizo con un converter de `decimal` en System.Text.Json, no con `JsonNumberHandling` global. Con eso,
+  `from_json` con `StringType` es fiel sin regex. Hice `down -v` para que bronze no mezclara montos
+  numéricos y montos como string. Lección: una afirmación técnica de la IA no es evidencia hasta que se ejecuta.
+- **Evidencia:**
+  - Prueba en la imagen de Glue (antes del cambio):
+    `FROM_JSON : {"amount":1.23456781234E7,...,"big":1.2345678901234567E14,...}` frente a
+    `EXPECTED  : {"amount":12345678.1234,...,"big":123456789012345.6789,...}`.
+  - `src/dotnet/Makers.Core.Api/Infrastructure/Outbox/DecimalAsStringJsonConverter.cs:15,29` → converter.
+  - `src/dotnet/Makers.Core.Api/Infrastructure/Outbox/OutboxInterceptor.cs:21-23` → solo en las opciones del payload.
+  - `src/dotnet/Makers.Core.Tests/OutboxInterceptorTests.cs:55-58` → `SaveChanges_PayloadCarriesAmountAsExactString`
+    con `12345678.1234`, `123456789012345.6789` y `150000`: passed (10/10 en `bash scripts/test.sh`).
+  - `lakehouse/glue/tests/test_ingest_audit_stream.py:56,66` → `test_money_as_string_reaches_bronze_payload_identical`
+    (los 2 montos) y `test_money_as_json_number_would_be_corrupted`: `6 passed`.
+  - End-to-end tras `down -v`: el payload de Kafka (partición 0, offset 2) comparado con bronze da
+    `IDENTICAL (byte-for-byte)`, con `"amount":"64348611"`. Bronze: 2500/2500 con amount como string.
+- **ADR afectado:** ADR-001. Ya se actualizó en este mismo commit con la sección "Contrato del mensaje"
+  (`docs/decisions.md:23-32`); lo pedí explícitamente.
+
+### IA-11 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**

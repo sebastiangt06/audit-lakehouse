@@ -121,7 +121,11 @@ public sealed partial class KafkaEventBusPublisher(IOptions<KafkaOptions> option
 
     /// <summary>
     /// Wire contract consumed by the Glue streaming job (step 05): snake_case, same names as the
-    /// bronze columns. The payload is embedded as a JSON object (not an escaped string).
+    /// bronze columns. The payload is embedded as a JSON object (not an escaped string), byte for
+    /// byte as stored in the outbox. Inside the payload, money (decimal) is a JSON STRING with its
+    /// exact digits ("amount":"12345678.1234"), written by DecimalAsStringJsonConverter when the
+    /// outbox row is created: consumers that read JSON numbers as doubles (Spark's from_json with a
+    /// StringType payload re-serializes through Jackson) would otherwise corrupt amounts.
     /// </summary>
     private static byte[] SerializeEnvelope(OutboundEvent evt)
     {
