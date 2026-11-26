@@ -55,7 +55,10 @@ puede correr sin `make` (por ejemplo, en Windows sin make instalado) con el coma
 | _(sin target)_ | `docker compose run --rm glue-jobs spark-submit jobs/create_tables.py --JOB_NAME create_tables` | Job Glue: crea `lake.audit.events_bronze` (idempotente; `glue-ingest` también lo invoca al arrancar) |
 | _(sin target)_ | `docker compose run --rm glue-jobs spark-sql -e "select count(*) from lake.audit.events_bronze"` | SQL sobre el lakehouse con el motor Glue/Spark |
 | _(sin target)_ | `docker compose run --rm --no-deps glue-jobs spark-submit tests/test_ingest_audit_stream.py` | Tests de las funciones puras PySpark (fidelidad del payload, linaje, DDL) |
-| `make demo` | _(paso 06)_ | Flujo end-to-end |
+| `make demo` | `bash scripts/e2e_demo.sh` | **Flujo end-to-end**: carga 1000 → outbox → Kafka → Glue → bronze → dbt silver/gold, espera por Trino a que bronze tenga todo lo despachado e imprime conciliación por capa + top 5 de gold. Funciona desde cero (`make clean && make up && make demo`) |
+| `make dbt` | `docker compose run --rm dbt build` | Modelos staging/silver/gold + tests de calidad (incluye `assert_no_event_loss`: outbox vs silver vía Trino) |
+| `make docs` | `docker compose run --rm dbt docs generate` | Documentación y linaje dbt en `lakehouse/dbt/target/` |
+| _(sin target)_ | `docker compose exec trino trino` | CLI SQL de Trino (catálogos `lake` y `sqlserver`); UI en `http://localhost:8080` |
 | `make chaos` | _(paso 10)_ | Cero pérdida con caída de ingesta y de Kafka |
 | `make replay FROM=...` | _(paso 10)_ | Replay desde Kafka / outbox |
 | `make maintenance` | _(paso 07)_ | Small files: antes/después de la compactación |

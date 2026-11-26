@@ -65,6 +65,15 @@ por DI. Los eventos de dominio pasan al outbox con un `SaveChangesInterceptor`.
 ## ADR-005 — Semántica de entrega: at-least-once + dedupe en silver
 **Decisión.** Bronze es append-only y guarda lo que llegó, con `kafka_partition`/`kafka_offset`.
 Silver (dbt incremental `merge`, `unique_key=event_id`) es la verdad deduplicada.
+**Incremental de silver.** Watermark sobre `ingested_at` (tiempo de llegada) con lookback de 1 h, no
+sobre `occurred_at` (tiempo del evento): un evento tardío (caída de la ingesta, replay, backfill) trae un
+`occurred_at` antiguo y un filtro por tiempo de evento lo descartaría para siempre. El particionado
+sigue siendo `day(occurred_at)`. **Gana la primera entrega** (menor `kafka_offset`): dentro del lote,
+`row_number()` por `event_id`; y los `event_id` ya presentes en silver se excluyen con un anti-join, así
+el `merge` solo inserta y una re-entrega no reemplaza la fila original. El anti-join se acota a las
+particiones de los días del lote (`occurred_at` entre su mínimo y su máximo, que una re-entrega conserva
+porque el evento es inmutable), con las cotas como literales para que Iceberg pode particiones en vez
+de recorrer silver completa en cada corrida (IA-11).
 **Alternativa.** `MERGE` en el streaming hacia bronze. Da dedupe más temprano, pero cada micro-batch
 tiene que leer la tabla destino, lo que agrega costo y latencia y complica el job de Spark.
 **Por qué.** Mantiene a Spark "tonto y confiable" (mover bytes) y pone la semántica en dbt, que es

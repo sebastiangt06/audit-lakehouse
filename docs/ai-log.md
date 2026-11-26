@@ -168,7 +168,43 @@ Formato de cada entrada:
 - **ADR afectado:** ADR-001. Ya se actualizó en este mismo commit con la sección "Contrato del mensaje"
   (`docs/decisions.md:23-32`); lo pedí explícitamente.
 
-### IA-11 · _título_
+### IA-11 · El PLAN filtraba el incremental de silver por `occurred_at` y perdía para siempre los eventos tardíos ⚠️
+- **Commit:** _por completar_ (paso 06, `feat(dbt): silver/gold models on iceberg via trino with data quality tests`)
+- **Prompt:** `/step 06`, prompt del paso en `docs/PLAN.md` (escrito con la IA de diseño), que pedía:
+  "Filtro incremental con ventana de lookback de 1h sobre occurred_at para eventos tardíos." Mi prompt del
+  paso lo repetía: "lookback de 1h para eventos tardíos".
+- **Respuesta de la IA:** Claude Code, en el plan y antes de escribir código, marcó el choque: un evento que
+  llega más de 1 h tarde trae un `occurred_at` antiguo y el filtro lo descarta para siempre. Pasa tras una
+  caída de Glue de más de 1 h, en un replay (paso 10) o con el backfill de meses legados (paso 09).
+  `assert_no_event_loss` no lo detectaría si el outbox ya se purgó; y en el backfill del paso 09 esos
+  eventos ni siquiera pasan por el outbox, así que el test tampoco los vería aunque el outbox no se hubiera
+  purgado. Propuso un watermark sobre `ingested_at` (cuándo llegó), conservando el particionado
+  `day(occurred_at)`, y excluir del lote los `event_id` que ya están en silver, para que el `merge` no
+  reemplace la primera entrega (menor `kafka_offset`) por una re-entrega posterior.
+- **Problema detectado:** el error estaba en el PLAN, no en el código: confundía el tiempo del evento con el
+  tiempo de llegada. Los eventos tardíos son justo los que un lookback sobre `occurred_at` no puede ver.
+- **Decisión humana:** aprobé el watermark sobre `ingested_at` con lookback de 1 h y el anti-join, y agregué
+  una condición: el anti-join solo mira las particiones de los días del lote (`occurred_at` entre el mínimo y
+  el máximo del lote, que una re-entrega conserva porque el evento es inmutable). Así Iceberg poda
+  particiones y no se recorre silver completa en cada corrida. Lección: el tiempo del evento y el tiempo de
+  llegada son relojes distintos; el incremental se filtra por el de llegada.
+- **Evidencia:**
+  - `docs/PLAN.md:222` → la instrucción del paso 06, ya corregida a `ingested_at` con nota a esta entrada.
+  - `lakehouse/dbt/models/silver/audit_events.sql:20-34` → las tres decisiones documentadas en el modelo;
+    `:56` watermark sobre `ingested_at`; `:67` primera entrega por `kafka_offset`; `:98` anti-join con cotas.
+  - SQL compilado: `where s.occurred_at between timestamp '2026-11-26 14:50:26.384783 UTC' and timestamp
+    '2026-11-26 14:52:58.972558 UTC'` → cotas como literales (poda en planificación).
+  - `EXPLAIN ANALYZE` del scan de silver: día sin datos (2026-11-20) → `Input: 0 rows (0B)`, sin input físico;
+    día del lote (2026-11-26) → `Input: 2502 rows`, `Physical input: 279.39kB`.
+  - Dedupe: 3 copias con `kafka_offset + 1000000` en bronze (2505 filas / 2502 distintos) → `dbt build`
+    incremental `MERGE (0 rows)` y `--full-refresh` `CREATE TABLE (2_502 rows)`; en ambos, silver 2502/2502
+    con los offsets originales (3, 2, 1) y `unique` en PASS.
+  - Límite honesto: el escenario de pérdida (un evento que llega más de 1 h tarde) se razonó, pero no se
+    reprodujo con una prueba. Lo verificado es la idempotencia, la primera entrega y la poda.
+- **ADR afectado:** ADR-005 (dedupe en silver), actualizado en el mismo commit: watermark sobre `ingested_at`
+  con lookback de 1 h y regla de primera entrega con anti-join acotado a las particiones del lote.
+
+### IA-12 · _título_
 - **Commit:** `abc1234`
 - **Prompt:**
 - **Respuesta de la IA:**

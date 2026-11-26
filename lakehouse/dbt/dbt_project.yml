@@ -1,0 +1,29 @@
+name: audit_lakehouse
+version: "1.0.0"
+profile: audit_lakehouse
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+flags:
+  send_anonymous_usage_stats: false   # no telemetry to external services
+  require_certificate_validation: true # validate TLS when Trino is behind HTTPS (prod); no effect on local http
+
+# staging (views) -> silver (incremental merge, deduplicated truth) -> gold (marts)
+models:
+  audit_lakehouse:
+    staging:
+      +schema: staging
+      +materialized: view
+    silver:
+      +schema: silver
+    gold:
+      +schema: gold
+      +materialized: table
+      +properties:
+        format: "'PARQUET'"
+
+vars:
+  high_value_threshold_cop: 10000000   # regulatory example report
+  silver_lookback_hours: 1             # late-arrival window on ingested_at

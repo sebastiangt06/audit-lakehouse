@@ -9,7 +9,7 @@ N ?= 1000
 P ?= 10
 FROM ?=
 
-.PHONY: help up down clean test demo load dbt maintenance chaos replay evolve lifecycle metrics
+.PHONY: help up down clean test demo load dbt docs maintenance chaos replay evolve lifecycle metrics
 
 help: ## List available targets
 	@bash scripts/help.sh
@@ -29,11 +29,14 @@ test: ## Run .NET tests in the pinned SDK image (atomicity test needs `make up`)
 load: ## Generate load: make load N=5000 P=20 (defaults N=1000 P=10)
 	docker compose run --rm loadgen --count $(N) --parallel $(P)
 
-demo: ## End-to-end flow: load -> outbox -> kafka -> iceberg -> dbt -> gold [step 06]
-	@bash scripts/not_implemented.sh demo 06
+demo: ## End-to-end flow: load -> outbox -> kafka -> iceberg -> dbt -> gold, with reconciliation
+	bash scripts/e2e_demo.sh
 
-dbt: ## Run dbt build (silver/gold models + tests) [step 06]
-	@bash scripts/not_implemented.sh dbt 06
+dbt: ## dbt build: staging/silver/gold models + data quality tests (via Trino)
+	docker compose run --rm dbt build
+
+docs: ## dbt docs generate (lineage + catalog) into lakehouse/dbt/target/
+	docker compose run --rm dbt docs generate
 
 maintenance: ## Iceberg maintenance: compaction, snapshot expiry, orphans [step 07]
 	@bash scripts/not_implemented.sh maintenance 07

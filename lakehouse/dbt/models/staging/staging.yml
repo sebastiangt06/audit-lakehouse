@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: stg_audit_events
+    description: Typed audit events from bronze, payload fields extracted. Still at-least-once (may repeat event_id).
+    columns:
+      - name: amount
+        description: decimal(19,4) cast from the exact JSON string in the payload (no double conversion).
+      - name: kafka_offset
+        description: Source offset; the lowest one wins when deduplicating in silver.
+  - name: stg_outbox_dispatched
+    description: Ephemeral. Outbox rows already acked by Kafka, event_id normalized to lower-case varchar(36).

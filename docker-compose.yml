@@ -305,6 +305,57 @@ services:
     mem_limit: 2g
     restart: "no"
 
+  # ---------------------------------------------------------------------------
+  # Trino: SQL engine for dbt over Iceberg + `sqlserver` catalog for reconciliation (ADR-009)
+  # mem_limit 1536m: -Xmx1G heap (infra/trino/jvm.config) + 256M code cache + metaspace/direct
+  # buffers. Query memory per node defaults to 30% of heap: plenty for the PoC volume.
+  # ---------------------------------------------------------------------------
+  trino:
+    image: trinodb/trino:484
+    depends_on:
+      iceberg-rest:
+        condition: service_healthy
+      sqlserver-init:
+        condition: service_completed_successfully
+    environment:
+      # Referenced as ${ENV:...} in infra/trino/catalog/*.properties.
+      AWS_REGION: ${AWS_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      CORE_DB: ${CORE_DB}
+      SA_PASSWORD: ${SA_PASSWORD}
+    ports:
+      - "${TRINO_PORT}:8080"
+    volumes:
+      - ./infra/trino/catalog:/etc/trino/catalog:ro
+      - ./infra/trino/jvm.config:/etc/trino/jvm.config:ro
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  # dbt (dbt-core + dbt-trino): staging -> silver -> gold + data quality tests.
+  #   docker compose run --rm dbt build | docker compose run --rm dbt docs generate
+  # The project is bind-mounted so docs (target/) land on the host (git-ignored).
+  dbt:
+    build:
+      context: ./lakehouse/dbt
+    image: audit-lakehouse/dbt:local
+    profiles: ["tools"]
+    depends_on:
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_HOST: trino
+      TRINO_HTTP_PORT: "8080"
+      DBT_CATALOG: lake
+    volumes:
+      - ./lakehouse/dbt:/usr/app
+    restart: "no"
+
 volumes:
   sqlserver-data:
   kafka-data:

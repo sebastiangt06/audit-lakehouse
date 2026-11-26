@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Raw audit events appended by the Glue streaming job (Kafka -> Iceberg), at-least-once.
+    database: lake
+    schema: audit
+    config:
+      loaded_at_field: ingested_at
+      freshness:
+        warn_after: {count: 15, period: minute}
+        error_after: {count: 1, period: hour}
+    tables:
+      - name: events_bronze
+        description: Append-only; may contain duplicates by event_id (redeliveries). Partitioned by day(occurred_at).
+
+  - name: core_outbox
+    description: Transactional outbox of the .NET core in SQL Server, read through Trino for reconciliation.
+    database: sqlserver
+    schema: outbox
+    tables:
+      - name: outboxmessages
+        description: One row per audit event, written in the business transaction; processedat = Kafka acked.
