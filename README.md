@@ -62,10 +62,12 @@ flowchart LR
 - **Windows:** usa Git Bash. El repo fuerza finales de línea LF con `.gitattributes` (un CRLF rompe los
   scripts dentro de los contenedores), y los scripts exportan `MSYS_NO_PATHCONV=1` para que Git Bash no
   reescriba rutas como `/opt/...`. Git Bash no trae `make`: usa los comandos de la columna "Sin make".
+- En **PowerShell**, `bash` apunta a WSL y falla si no tienes una distro instalada. Usa Git Bash, o ejecuta los scripts así: 
+  `& "C:\Program Files\Git\bin\bash.exe" scripts/e2e_demo.sh`
 - Apple Silicon: SQL Server es solo amd64 y corre emulado; activa Rosetta en Docker Desktop.
 
 ```bash
-git clone <repo> && cd <repo>
+git clone https://github.com/sebastiangt06/audit-lakehouse.git && cd audit-lakehouse
 cp .env.example .env     # valores dummy, solo locales
 make up                  # docker compose up -d --build --wait
 make demo                # bash scripts/e2e_demo.sh
@@ -247,11 +249,12 @@ La garantía se defiende por capas: en cada una, el dato ya está persistido ant
    test contra el SQL Server real: fuerzo una violación de PK justo antes del commit, después de verificar
    que la transacción y la fila del outbox sí se escribieron, y no queda ninguna de las dos.
 2. **Relay y Kafka.** Si Kafka cae, la API sigue respondiendo y el outbox acumula. En la verificación del
-   paso 03 (salida de la sesión; esos volúmenes ya se recrearon): 20 `POST` respondieron 201 con Kafka
-   caído, el relay hizo backoff exponencial con jitter hasta 30 s, registró
-   `Outbox relay recovered after 8 failed attempts` y el backlog se drenó de 123 pendientes a 0. La
-   configuración valida al arrancar que `Kafka:MessageTimeoutMs` (10.000 ms) sea menor que la lease
-   (30 s), para que una lease no expire con mensajes en vuelo.
+   paso 03 (salida de la sesión; esos volúmenes ya se recrearon): al arrancar el relay por primera vez drenó
+   en un lote los **123** eventos que se habían acumulado sin relay. Después, con Kafka detenido, 20 `POST`
+   respondieron 201 y quedaron **20** pendientes en el outbox. El relay hizo backoff exponencial con jitter
+   hasta 30 s, registró `Outbox relay recovered after 8 failed attempts (116.1s degraded)` y, al volver
+   Kafka, los 20 pendientes bajaron a 0. La configuración valida al arrancar que `Kafka:MessageTimeoutMs`
+   (10.000 ms) sea menor que la lease (30 s), para que una lease no expire con mensajes en vuelo.
 3. **Ingesta caída durante un pico.** Kafka retiene 7 días, y `glue-ingest` retoma desde su checkpoint
    (volumen). Lo probé con `docker compose stop glue-ingest` y un pico de 1000 transacciones (P=20):
    - La API respondió **1000×201** (728,3 req/s, p95 59,6 ms); no depende de la ingesta.
