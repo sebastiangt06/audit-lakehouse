@@ -82,7 +82,7 @@ Formato de cada entrada:
 > - Tests que "pasan" porque no verifican nada (asserts vacíos o mocks de todo).
 
 ### IA-08 · La IA silenció los logs de SQL de toda la app para tapar una carrera ⚠️
-- **Commit:** _por completar_ (paso 02, `feat(dotnet): transactional core with outbox written in the same transaction`)
+- **Commit:** `1fdc25f` (paso 02, `feat(dotnet): transactional core with outbox written in the same transaction`)
 - **Prompt:** `/step 02` → prompt del paso 02 de `docs/PLAN.md` (dominio + API + outbox en la misma transacción).
 - **Respuesta de la IA:** en el plan propuso auto-abrir la cuenta origen si no existía, con reintento
   ante violación de unique (2601/2627) y `ChangeTracker.Clear()`. Aprobé ese plan sin notar el problema de dominio.
@@ -105,7 +105,7 @@ Formato de cada entrada:
 - **ADR afectado:** ninguno. La auto-apertura de cuentas no estaba en ningún ADR; fue un detalle de implementación del plan.
 
 ### IA-09 · La IA configuró xUnit v3 con el runner VSTest, que el SDK de .NET 10 ya no soporta ⚠️
-- **Commit:** _por completar_ (paso 04, `feat(dotnet): load generator and outbox atomicity tests`)
+- **Commit:** `9c82520` (paso 04, `feat(dotnet): load generator and outbox atomicity tests`)
 - **Prompt:** `/step 04` + prompt detallado del paso 04: "Makers.Core.Tests (xUnit, en la solución) … Test de
   ATOMICIDAD contra el SQL Server real del compose … Si no hay SQL Server disponible, el test se marca como
   skipped, no como verde … crea scripts/test.sh que corre `dotnet test` dentro de la imagen sdk pinneada".
@@ -132,7 +132,7 @@ Formato de cada entrada:
 - **ADR afectado:** ninguno. El runner de tests no está en ningún ADR; ADR-004 cubre .NET 10 y la estructura, no el tooling de tests.
 
 ### IA-10 · La IA asumió que `from_json` conserva el JSON crudo, y el agente propuso una regex para rodear el problema ⚠️
-- **Commit:** _por completar_ (paso 05, `fix(dotnet): serialize money as exact JSON strings in the event contract`)
+- **Commit:** `a1e4dd1` (paso 05, `fix(dotnet): serialize money as exact JSON strings in the event contract`)
 - **Prompt:** `/step 05` + prompt detallado del paso 05, que incluía: "En bronze, payload se guarda como
   string con el JSON crudo (verifica que from_json con StringType lo preserve así)".
 - **Respuesta de la IA:**
@@ -169,7 +169,7 @@ Formato de cada entrada:
   (`docs/decisions.md:23-32`); lo pedí explícitamente.
 
 ### IA-11 · El PLAN filtraba el incremental de silver por `occurred_at` y perdía para siempre los eventos tardíos ⚠️
-- **Commit:** _por completar_ (paso 06, `feat(dbt): silver/gold models on iceberg via trino with data quality tests`)
+- **Commit:** `f7bceed` (paso 06, `feat(dbt): silver/gold models on iceberg via trino with data quality tests`)
 - **Prompt:** `/step 06`, prompt del paso en `docs/PLAN.md` (escrito con la IA de diseño), que pedía:
   "Filtro incremental con ventana de lookback de 1h sobre occurred_at para eventos tardíos." Mi prompt del
   paso lo repetía: "lookback de 1h para eventos tardíos".
@@ -215,6 +215,11 @@ Formato de cada entrada:
 ---
 
 ## Métricas de uso (completar al final)
-- Commits asistidos por IA: _n_ / _total_
-- Correcciones humanas registradas: _n_
-- Tiempo estimado ahorrado vs. tiempo invertido en verificar: _..._
+- Commits asistidos por IA: 9 / 11 commits sin merge hasta `f7bceed` (los que llevan el trailer
+  `Co-Authored-By: Claude`; `git log --format='%(trailers:key=Co-Authored-By)'`). Los 2 restantes
+  (`8116cde`, `3eb152f`) son la inicialización manual del repo.
+- Entradas registradas: 11. Correcciones humanas a output de la IA (⚠️): 7, de las cuales 3 en
+  diseño (IA-02, IA-03, IA-07) y 4 en implementación (IA-08 a IA-11). Las otras 4 (IA-01, IA-04,
+  IA-05, IA-06) son verificaciones o decisiones de diseño sin error de la IA.
+- Tiempo ahorrado vs. tiempo invertido en verificar: **no medido**. No registré tiempos por paso,
+  así que no doy una cifra.

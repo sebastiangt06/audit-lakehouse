@@ -7,9 +7,8 @@ SHELL := /bin/sh
 
 N ?= 1000
 P ?= 10
-FROM ?=
 
-.PHONY: help up down clean test demo load dbt docs maintenance chaos replay evolve lifecycle metrics
+.PHONY: help up down clean test demo load dbt docs
 
 help: ## List available targets
 	@bash scripts/help.sh
@@ -37,21 +36,3 @@ dbt: ## dbt build: staging/silver/gold models + data quality tests (via Trino)
 
 docs: ## dbt docs generate (lineage + catalog) into lakehouse/dbt/target/
 	docker compose run --rm dbt docs generate
-
-maintenance: ## Iceberg maintenance: compaction, snapshot expiry, orphans [step 07]
-	@bash scripts/not_implemented.sh maintenance 07
-
-evolve: ## Schema evolution v1 -> v2 + time travel demo [step 08]
-	@bash scripts/not_implemented.sh evolve 08
-
-lifecycle: ## Verified backfill to Iceberg + safe batched purge in SQL Server [step 09]
-	@bash scripts/not_implemented.sh lifecycle 09
-
-chaos: ## Resilience demo: ingestion and Kafka outages, zero loss [step 10]
-	@bash scripts/not_implemented.sh chaos 10
-
-replay: ## Replay from Kafka or outbox: make replay FROM=<iso-datetime> [step 10]
-	@bash scripts/not_implemented.sh replay 10
-
-metrics: ## Storage and latency cost-benefit metrics [step 12]
-	@bash scripts/not_implemented.sh metrics 12
