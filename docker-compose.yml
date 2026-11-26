@@ -30,6 +30,51 @@ services:
       retries: 12
       start_period: 30s
 
+  # One-shot: idempotent schema + legacy audit.AuditLog seed (reuses the sqlserver image for sqlcmd).
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04
+    platform: linux/amd64
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD}
+      CORE_DB: ${CORE_DB}
+    volumes:
+      - ./infra/sqlserver/init.sql:/init/init.sql:ro
+    entrypoint: ["bash", "-c"]
+    # -I: QUOTED_IDENTIFIER ON (filtered indexes). -b: non-zero exit on any SQL error.
+    command:
+      - |
+        set -euo pipefail
+        /opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P "$$SA_PASSWORD" \
+          -b -I -v CORE_DB="$$CORE_DB" -i /init/init.sql
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Transactional API (.NET 10): business change + outbox row in one transaction
+  # ---------------------------------------------------------------------------
+  core-api:
+    build:
+      context: ./src/dotnet
+    image: audit-lakehouse/core:local
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      ConnectionStrings__Core: "Server=sqlserver,1433;Database=${CORE_DB};User Id=sa;Password=${SA_PASSWORD};Encrypt=True;TrustServerCertificate=True"
+    ports:
+      - "${CORE_API_PORT}:8080"
+    healthcheck:
+      # Chiseled image: no shell/curl. The app binary probes its own /health.
+      test: ["CMD", "dotnet", "/app/Makers.Core.Api.dll", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
   # ---------------------------------------------------------------------------
   # Durable buffer + replay window (KRaft, single node)
   # ---------------------------------------------------------------------------

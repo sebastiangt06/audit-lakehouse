@@ -102,7 +102,7 @@ multi-stage con imagen chiseled/aspnet 10.
 ```bash
 curl -X POST localhost:8081/transactions -H 'content-type: application/json' \
   -d '{"tenantId":"t1","from":"A1","to":"B2","amount":150000,"currency":"COP"}'
-docker compose exec sqlserver /opt/mssql-tools18/bin/sqlcmd -C -U sa -P "$SA_PASSWORD" \
+docker compose exec sqlserver /opt/mssql-tools18/bin/sqlcmd -C -U sa -P "$SA_PASSWORD" -d MakersCore \
   -Q "select count(*) from core.Transactions; select count(*) from outbox.OutboxMessages where ProcessedAt is null"
 ```
 Ambos conteos deben subir juntos.

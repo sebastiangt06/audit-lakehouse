@@ -14,8 +14,8 @@ FROM ?=
 help: ## List available targets
 	@bash scripts/help.sh
 
-up: ## Start all services and wait until healthy (requires .env)
-	docker compose up -d --wait
+up: ## Build and start all services, wait until healthy (requires .env)
+	docker compose up -d --build --wait
 
 down: ## Stop services, keep volumes
 	docker compose down
